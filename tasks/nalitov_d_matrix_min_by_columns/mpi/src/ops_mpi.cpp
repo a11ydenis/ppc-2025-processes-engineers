@@ -2,71 +2,79 @@
 
 #include <mpi.h>
 
-#include <numeric>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include "nalitov_d_matrix_min_by_columns/common/include/common.hpp"
-#include "util/include/util.hpp"
 
 namespace nalitov_d_matrix_min_by_columns {
 
 NalitovDMinMatrixMPI::NalitovDMinMatrixMPI(const InType &in) {
   SetTypeOfTask(GetStaticTypeOfTask());
   GetInput() = in;
-  GetOutput() = 0;
+  GetOutput().clear();
 }
 
 bool NalitovDMinMatrixMPI::ValidationImpl() {
-  return (GetInput() > 0) && (GetOutput() == 0);
+  return (GetInput() > 0) && (GetOutput().empty());
 }
 
 bool NalitovDMinMatrixMPI::PreProcessingImpl() {
-  GetOutput() = 2 * GetInput();
-  return GetOutput() > 0;
+  GetOutput().clear();
+  GetOutput().reserve(GetInput());
+  return true;
 }
 
 bool NalitovDMinMatrixMPI::RunImpl() {
-  auto input = GetInput();
-  if (input == 0) {
+  auto generate = [](int64_t i, int64_t j) -> InType {
+    uint64_t seed = (i * 100000007ULL + j * 1000000009ULL) ^ 42ULL;
+
+    seed ^= seed >> 12;
+    seed ^= seed << 25;
+    seed ^= seed >> 27;
+    uint64_t val = seed * 0x2545F4914F6CDD1DULL;
+
+    return static_cast<InType>((val % 2000001) - 1000000);
+  };
+
+  InType n = GetInput();
+  if (n == 0) {
     return false;
   }
 
-  for (InType i = 0; i < GetInput(); i++) {
-    for (InType j = 0; j < GetInput(); j++) {
-      for (InType k = 0; k < GetInput(); k++) {
-        std::vector<InType> tmp(i + j + k, 1);
-        GetOutput() += std::accumulate(tmp.begin(), tmp.end(), 0);
-        GetOutput() -= i + j + k;
-      }
-    }
-  }
-
-  const int num_threads = ppc::util::GetNumThreads();
-  GetOutput() *= num_threads;
-
   int rank = 0;
+  int size = 0;
+
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-  if (rank == 0) {
-    GetOutput() /= num_threads;
-  } else {
-    int counter = 0;
-    for (int i = 0; i < num_threads; i++) {
-      counter++;
-    }
+  int rows_per_process = n / size;
+  int leftover = n % size;
+  int process_rows_number = rows_per_process + (rank < leftover ? 1 : 0);
 
-    if (counter != 0) {
-      GetOutput() /= counter;
+  int first_row = (rank * rows_per_process) + std::min(rank, leftover);
+  int last_row = first_row + process_rows_number;
+
+  std::vector<InType> local_min_columns(static_cast<size_t>(n), std::numeric_limits<InType>::max());
+
+  for (InType i = first_row; i < last_row; i++) {
+    for (InType j = 0; j < n; j++) {
+      InType val = generate(static_cast<int64_t>(i), static_cast<int64_t>(j));
+      local_min_columns[static_cast<size_t>(j)] = std::min(local_min_columns[static_cast<size_t>(j)], val);
     }
   }
 
-  MPI_Barrier(MPI_COMM_WORLD);
-  return GetOutput() > 0;
+  GetOutput().assign(static_cast<size_t>(n), std::numeric_limits<InType>::max());
+
+  MPI_Allreduce(local_min_columns.data(), GetOutput().data(), static_cast<int>(n), MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+
+  return !GetOutput().empty() && (GetOutput().size() == static_cast<size_t>(n));
 }
 
 bool NalitovDMinMatrixMPI::PostProcessingImpl() {
-  GetOutput() -= GetInput();
-  return GetOutput() > 0;
+  return !GetOutput().empty() && (GetOutput().size() == static_cast<size_t>(GetInput()));
 }
 
 }  // namespace nalitov_d_matrix_min_by_columns

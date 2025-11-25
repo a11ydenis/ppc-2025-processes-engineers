@@ -1,60 +1,65 @@
 #include "nalitov_d_matrix_min_by_columns/seq/include/ops_seq.hpp"
 
-#include <numeric>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include "nalitov_d_matrix_min_by_columns/common/include/common.hpp"
-#include "util/include/util.hpp"
 
 namespace nalitov_d_matrix_min_by_columns {
+
+inline auto generate = [](int64_t i, int64_t j) -> InType {
+  uint64_t seed = (i * 100000007ULL + j * 1000000009ULL) ^ 42ULL;
+
+  seed ^= seed >> 12;
+  seed ^= seed << 25;
+  seed ^= seed >> 27;
+  uint64_t val = seed * 0x2545F4914F6CDD1DULL;
+
+  return static_cast<InType>((val % 2000001) - 1000000);
+};
 
 NalitovDMinMatrixSEQ::NalitovDMinMatrixSEQ(const InType &in) {
   SetTypeOfTask(GetStaticTypeOfTask());
   GetInput() = in;
-  GetOutput() = 0;
+  GetOutput().clear();
 }
 
 bool NalitovDMinMatrixSEQ::ValidationImpl() {
-  return (GetInput() > 0) && (GetOutput() == 0);
+  return (GetInput() > 0) && (GetOutput().empty());
 }
 
 bool NalitovDMinMatrixSEQ::PreProcessingImpl() {
-  GetOutput() = 2 * GetInput();
-  return GetOutput() > 0;
+  GetOutput().clear();
+  GetOutput().reserve(GetInput());
+  return true;
 }
 
 bool NalitovDMinMatrixSEQ::RunImpl() {
-  if (GetInput() == 0) {
+  InType n = GetInput();
+  if (n == 0) {
     return false;
   }
 
-  for (InType i = 0; i < GetInput(); i++) {
-    for (InType j = 0; j < GetInput(); j++) {
-      for (InType k = 0; k < GetInput(); k++) {
-        std::vector<InType> tmp(i + j + k, 1);
-        GetOutput() += std::accumulate(tmp.begin(), tmp.end(), 0);
-        GetOutput() -= i + j + k;
-      }
+  GetOutput().clear();
+  GetOutput().reserve(n);
+
+  for (InType j = 0; j < n; j++) {
+    InType min_val = generate(static_cast<int64_t>(0), static_cast<int64_t>(j));
+    for (InType i = 1; i < n; i++) {
+      InType val = generate(static_cast<int64_t>(i), static_cast<int64_t>(j));
+      min_val = std::min(min_val, val);
     }
+
+    GetOutput().push_back(min_val);
   }
 
-  const int num_threads = ppc::util::GetNumThreads();
-  GetOutput() *= num_threads;
-
-  int counter = 0;
-  for (int i = 0; i < num_threads; i++) {
-    counter++;
-  }
-
-  if (counter != 0) {
-    GetOutput() /= counter;
-  }
-  return GetOutput() > 0;
+  return !GetOutput().empty() && (GetOutput().size() == static_cast<size_t>(n));
 }
 
 bool NalitovDMinMatrixSEQ::PostProcessingImpl() {
-  GetOutput() -= GetInput();
-  return GetOutput() > 0;
+  return !GetOutput().empty() && (GetOutput().size() == static_cast<size_t>(GetInput()));
 }
 
 }  // namespace nalitov_d_matrix_min_by_columns
