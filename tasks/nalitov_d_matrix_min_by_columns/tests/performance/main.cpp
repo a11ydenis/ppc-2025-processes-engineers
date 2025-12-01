@@ -1,7 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
-#include <random>
+#include <cstdint>
+#include <iostream>
+#include <limits>
+#include <utility>
+#include <vector>
 
 #include "nalitov_d_matrix_min_by_columns/common/include/common.hpp"
 #include "nalitov_d_matrix_min_by_columns/mpi/include/ops_mpi.hpp"
@@ -10,31 +15,34 @@
 
 namespace nalitov_d_matrix_min_by_columns {
 
-inline auto generate_value = [](int64_t i, int64_t j) -> InType {
+namespace {
+
+inline InType Generate(int64_t i, int64_t j) {
   uint64_t seed = (i * 100000007ULL + j * 1000000009ULL) ^ 42ULL;
 
   seed ^= seed >> 12;
   seed ^= seed << 25;
   seed ^= seed >> 27;
-  uint64_t val = seed * 0x2545F4914F6CDD1DULL;
+  uint64_t value = seed * 0x2545F4914F6CDD1DULL;
 
-  return static_cast<InType>((val % 2000001) - 1000000);
-};
+  auto result = static_cast<InType>((value % 2000001ULL) - 1000000);
+  return result;
+}
 
 inline std::vector<InType> CalculateExpectedColumnMins(InType n) {
   std::vector<InType> expected_mins(static_cast<size_t>(n), std::numeric_limits<InType>::max());
 
   for (InType i = 0; i < n; i++) {
     for (InType j = 0; j < n; j++) {
-      InType val = generate_value(static_cast<int64_t>(i), static_cast<int64_t>(j));
-      if (val < expected_mins[static_cast<size_t>(j)]) {
-        expected_mins[static_cast<size_t>(j)] = val;
-      }
+      InType value = Generate(static_cast<int64_t>(i), static_cast<int64_t>(j));
+      expected_mins[static_cast<size_t>(j)] = std::min(value, expected_mins[static_cast<size_t>(j)]);
     }
   }
 
   return expected_mins;
 }
+
+}  // anonymous namespace
 
 class NalitovDMinMatrixPerfomanceTests : public ppc::util::BaseRunPerfTests<InType, OutType> {
   const InType kTestSize_ = 10000;
@@ -48,14 +56,14 @@ class NalitovDMinMatrixPerfomanceTests : public ppc::util::BaseRunPerfTests<InTy
 
   bool CheckTestOutputData(OutType &output_data) final {
     if (output_data.size() != static_cast<size_t>(input_data_)) {
-      std::cout << "Size mismatch: expected " << input_data_ << ", got " << output_data.size() << std::endl;
+      std::cout << "Size mismatch: expected " << input_data_ << ", got " << output_data.size() << '\n';
       return false;
     }
 
-    for (std::size_t j = 0; j < output_data.size(); j++) {
+    for (std::size_t j = 0; std::cmp_less(j, output_data.size()); j++) {
       if (output_data[j] != expected_mins_[j]) {
         std::cout << "Value mismatch at column " << j << ": expected " << expected_mins_[j] << ", got "
-                  << output_data[j] << std::endl;
+                  << output_data[j] << '\n';
         return false;
       }
     }

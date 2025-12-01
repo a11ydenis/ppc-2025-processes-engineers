@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "nalitov_d_matrix_min_by_columns/common/include/common.hpp"
@@ -34,9 +35,9 @@ bool NalitovDMinMatrixMPI::RunImpl() {
     seed ^= seed >> 12;
     seed ^= seed << 25;
     seed ^= seed >> 27;
-    uint64_t val = seed * 0x2545F4914F6CDD1DULL;
+    uint64_t value = seed * 0x2545F4914F6CDD1DULL;
 
-    return static_cast<InType>((val % 2000001) - 1000000);
+    return static_cast<InType>((value % 2000001) - 1000000);
   };
 
   InType n = GetInput();

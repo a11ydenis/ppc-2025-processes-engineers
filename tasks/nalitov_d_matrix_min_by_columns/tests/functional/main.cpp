@@ -1,11 +1,14 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "nalitov_d_matrix_min_by_columns/common/include/common.hpp"
@@ -16,31 +19,34 @@
 
 namespace nalitov_d_matrix_min_by_columns {
 
-inline auto generate = [](int64_t i, int64_t j) -> InType {
+namespace {
+
+inline InType Generate(int64_t i, int64_t j) {
   uint64_t seed = (i * 100000007ULL + j * 1000000009ULL) ^ 42ULL;
 
   seed ^= seed >> 12;
   seed ^= seed << 25;
   seed ^= seed >> 27;
-  uint64_t val = seed * 0x2545F4914F6CDD1DULL;
+  uint64_t value = seed * 0x2545F4914F6CDD1DULL;
 
-  return static_cast<InType>((val % 2000001) - 1000000);
-};
+  auto result = static_cast<InType>((value % 2000001ULL) - 1000000);
+  return result;
+}
 
 inline std::vector<InType> CalculateExpectedColumnMins(InType n) {
   std::vector<InType> expected_mins(static_cast<size_t>(n), std::numeric_limits<InType>::max());
 
   for (InType i = 0; i < n; i++) {
     for (InType j = 0; j < n; j++) {
-      InType val = generate(static_cast<int64_t>(i), static_cast<int64_t>(j));
-      if (val < expected_mins[static_cast<size_t>(j)]) {
-        expected_mins[static_cast<size_t>(j)] = val;
-      }
+      InType value = Generate(static_cast<int64_t>(i), static_cast<int64_t>(j));
+      expected_mins[static_cast<size_t>(j)] = std::min(value, expected_mins[static_cast<size_t>(j)]);
     }
   }
 
   return expected_mins;
 }
+
+}  // anonymous namespace
 
 class NalitovDMinMatrixTestProcesses : public ppc::util::BaseRunFuncTests<InType, OutType, TestType> {
  public:
@@ -84,13 +90,11 @@ TEST_P(NalitovDMinMatrixTestProcesses, ComputesColumnMinimumsForDiverseSizes) {
   ExecuteTest(GetParam());
 }
 
-const std::array<TestType, 12> kFunctionalParams = {
-    std::make_tuple(1, "size_1_unit"),       std::make_tuple(2, "size_2_pair"),
-    std::make_tuple(3, "size_3_small"),      std::make_tuple(5, "size_5_fibonacci"),
-    std::make_tuple(7, "size_7_prime"),      std::make_tuple(17, "size_17_prime"),
-    std::make_tuple(31, "size_31_prime"),    std::make_tuple(64, "size_64_power2"),
-    std::make_tuple(99, "size_99_odd"),      std::make_tuple(128, "size_128_even"),
-    std::make_tuple(256, "size_256_power2"), std::make_tuple(512, "size_512_stress")};
+const std::array<TestType, 11> kFunctionalParams = {
+    std::make_tuple(1, "tuple_unit"),  std::make_tuple(2, "tuple_even"),   std::make_tuple(3, "tuple_odd"),
+    std::make_tuple(5, "tuple_5"),     std::make_tuple(17, "tuple_prime"), std::make_tuple(64, "tuple_64"),
+    std::make_tuple(99, "tuple_99"),   std::make_tuple(100, "tuple_100"),  std::make_tuple(128, "tuple_128"),
+    std::make_tuple(256, "tuple_256"), std::make_tuple(512, "tuple_512")};
 
 const auto kTaskMatrix = std::tuple_cat(ppc::util::AddFuncTask<NalitovDMinMatrixMPI, InType>(
                                             kFunctionalParams, PPC_SETTINGS_nalitov_d_matrix_min_by_columns),
@@ -118,8 +122,8 @@ void ExpectFullPipelineSuccess(InType n) {
 
   ASSERT_EQ(output.size(), static_cast<std::size_t>(n));
 
-  for (std::size_t j = 0; j < static_cast<std::size_t>(n); j++) {
-    ASSERT_EQ(output[j], expected_mins[j]) << "Column " << j << " minimum mismatch";
+  for (std::size_t j = 0; std::cmp_less(j, static_cast<std::size_t>(n)); j++) {
+    ASSERT_EQ(output[j], expected_mins[j]) << "Column " << j << ": mismatch";
   }
 }
 
@@ -194,7 +198,7 @@ void RunTaskTwice(TaskType &task, InType n) {
 
   ASSERT_EQ(output.size(), static_cast<std::size_t>(n));
 
-  for (std::size_t j = 0; j < static_cast<std::size_t>(n); j++) {
+  for (std::size_t j = 0; std::cmp_less(j, static_cast<std::size_t>(n)); j++) {
     ASSERT_EQ(output[j], expected_mins[j]) << "Column " << j << " minimum mismatch in reuse test";
   }
 }
