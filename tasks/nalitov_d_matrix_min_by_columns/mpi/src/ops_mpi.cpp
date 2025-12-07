@@ -67,9 +67,14 @@ bool NalitovDMinMatrixMPI::RunImpl() {
     }
   }
 
-  GetOutput().assign(static_cast<size_t>(n), std::numeric_limits<InType>::max());
+  std::vector<InType> global_min_columns(static_cast<size_t>(n), std::numeric_limits<InType>::max());
 
-  MPI_Allreduce(local_min_columns.data(), GetOutput().data(), static_cast<int>(n), MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+  MPI_Reduce(local_min_columns.data(), global_min_columns.data(), static_cast<int>(n), MPI_INT, MPI_MIN, 0,
+             MPI_COMM_WORLD);
+
+  MPI_Bcast(global_min_columns.data(), static_cast<int>(n), MPI_INT, 0, MPI_COMM_WORLD);
+
+  GetOutput() = std::move(global_min_columns);
 
   return !GetOutput().empty() && (GetOutput().size() == static_cast<size_t>(n));
 }

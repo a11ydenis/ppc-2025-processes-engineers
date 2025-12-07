@@ -133,8 +133,6 @@ for i in first_row .. last_row-1:
 MPI_Allreduce(local_min_columns.data(), global_min_columns.data(), n, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
 ```
 
-`MPI_Allreduce` возвращает результат всем процессам. Есть пространство для улучшения: чтобы уменьшить сетевой трафик, можно использовать `MPI_Reduce(..., MPI_MIN, root, ...)` — результат окажется только на одном процессе.
-
 ### Сложность, пропускная способность и память
 
 **Локальная временная сложность на каждый процесс:** `O(n * local_rows) ≈ O(n * (n/size)) = O(n² / size)`.
