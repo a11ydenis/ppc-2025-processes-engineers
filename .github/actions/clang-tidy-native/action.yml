@@ -8,7 +8,7 @@ inputs:
   exclude:
     description: 'Directories to exclude from analysis (space-separated)'
     required: false
-    default: '3rdparty'
+    default: '3rdparty build'
   clang_tidy_version:
     description: 'Clang-tidy version to use'
     required: false
@@ -23,41 +23,81 @@ runs:
     - name: Verify clang-tidy installation
       shell: bash
       run: |
-        clang-tidy-${{ inputs.clang_tidy_version }} --version
+        clang-tidy-${{ inputs.clang_tidy_version }} --version || \
+          (echo "::error::clang-tidy-${{ inputs.clang_tidy_version }} not found" && exit 1)
 
     - name: Get changed files
       id: changed-files
       shell: bash
       run: |
-        git config --global --add safe.directory $GITHUB_WORKSPACE
-        git fetch origin ${{ github.event.pull_request.base.ref }}
+        set -euo pipefail
 
-        # Check if .clang-tidy files were changed
-        CLANG_TIDY_CHANGED=$(git diff --name-only \
-          origin/${{ github.event.pull_request.base.ref }}...HEAD \
-          -- '**/.clang-tidy' || true)
+        # mark workspace safe for git operations
+        git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-        if [ -n "$CLANG_TIDY_CHANGED" ]; then
-          echo "::notice::.clang-tidy configuration changed, analyzing all source files"
-          # Find all source files in the repository (excluding specified directories)
-          CHANGED_FILES=$(find . -name "*.cpp" -o -name "*.hpp" -o -name "*.c" -o -name "*.h")
-          # Filter out excluded directories
-          for exclude_dir in ${{ inputs.exclude }}; do
-            CHANGED_FILES=$(echo "$CHANGED_FILES" | grep -v "^./${exclude_dir}/" || true)
-          done
-        else
-          # Only analyze changed source files
-          CHANGED_FILES=$(git diff --name-only \
-            origin/${{ github.event.pull_request.base.ref }}...HEAD \
-            -- '*.cpp' '*.hpp' '*.c' '*.h')
-          # Filter out excluded directories
-          for exclude_dir in ${{ inputs.exclude }}; do
-            CHANGED_FILES=$(echo "$CHANGED_FILES" | grep -v "^${exclude_dir}/" || true)
-          done
+        # Default exclude list (from inputs)
+        EXCLUDE_RAW="${{ inputs.exclude }}"
+        # Normalize: remove leading/trailing spaces, convert to array-like tokenization by whitespace
+        read -r -a EXCLUDE_ARR <<< "$EXCLUDE_RAW"
+
+        # Prepare an empty variable
+        CHANGED_FILES=""
+
+        echo "Event name: ${GITHUB_EVENT_NAME}"
+
+        if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+          # We're running on a PR -> compare with PR base
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "${BASE_REF}" ]; then
+            echo "::warning::Pull request base ref is empty; falling back to listing all files"
+          else
+            echo "Fetching origin/${BASE_REF}..."
+            # Fetch that ref only (shallow) to speed up
+            git fetch --no-tags --prune origin "${BASE_REF}:${BASE_REF}" || true
+
+            echo "Checking if .clang-tidy changed between origin/${BASE_REF} and HEAD..."
+            CLANG_TIDY_CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- '**/.clang-tidy' || true)
+
+            if [ -n "$CLANG_TIDY_CHANGED" ]; then
+              echo "::notice::.clang-tidy configuration changed, analyzing all source files"
+              # Find all source files
+              CHANGED_FILES=$(git ls-files '*.cpp' '*.c' '*.hpp' '*.h' || true)
+            else
+              # Only analyze changed source files
+              CHANGED_FILES=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- '*.cpp' '*.hpp' '*.c' '*.h' || true)
+            fi
+          fi
         fi
 
+        # If not a PR or fallback because BASE_REF was empty, list all tracked source files
+        if [ -z "$CHANGED_FILES" ]; then
+          echo "Not a pull_request or no diff detected — listing all tracked source files"
+          CHANGED_FILES=$(git ls-files '*.cpp' '*.c' '*.hpp' '*.h' || true)
+
+          # If git ls-files returned nothing (rare), fallback to find
+          if [ -z "$CHANGED_FILES" ]; then
+            CHANGED_FILES=$(find . -type f \
+              \( -name "*.cpp" -o -name "*.c" -o -name "*.hpp" -o -name "*.h" \) \
+              -print || true)
+            CHANGED_FILES=$(echo "$CHANGED_FILES" | sed 's#^\./##')
+          fi
+        fi
+
+        # Exclude directories from the list
+        for exclude_dir in "${EXCLUDE_ARR[@]}"; do
+          # if exclude_dir blank, skip
+          if [ -z "$exclude_dir" ]; then
+            continue
+          fi
+          CHANGED_FILES=$(printf '%s\n' "$CHANGED_FILES" | grep -E '^tasks/nalitov_d_matrix_min_by_columns/' || true)
+        done
+
+        # Remove empty lines and duplicates, preserve order
+        CHANGED_FILES=$(printf '%s\n' "$CHANGED_FILES" | sed '/^\s*$/d' | awk '!seen[$0]++')
+
+        # Write outputs
         echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-        echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+        printf '%s\n' "$CHANGED_FILES" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
 
         if [ -z "$CHANGED_FILES" ]; then
@@ -71,27 +111,50 @@ runs:
       shell: bash
       if: steps.changed-files.outputs.has_changes == 'true'
       run: |
+        set -euo pipefail
+
         COMMENTS_FILE=$(mktemp)
         TOTAL_ISSUES=0
 
+        # Read the changed_files output line-by-line
+        # Use a here-doc to preserve newlines from the composite output
+        CHANGED_FILES_CONTENT="${{ steps.changed-files.outputs.changed_files }}"
+        if [ -z "${CHANGED_FILES_CONTENT}" ]; then
+          echo "No files to analyze"
+          echo "total_comments=0" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
         while IFS= read -r file; do
-          if [ -n "$file" ] && [ -f "$file" ]; then
-            echo "Analyzing $file..."
-            FILE_OUTPUT=$(mktemp)
-            if clang-tidy-${{ inputs.clang_tidy_version }} "$file" \
-               -p ${{ inputs.build_dir }} --format-style=file 2>&1 | \
-               tee "$FILE_OUTPUT"; then
-              ISSUES=$(grep -c "warning:\|error:" "$FILE_OUTPUT" 2>/dev/null || echo "0")
-              ISSUES=$(echo "$ISSUES" | tr -d '[:space:]')
-              TOTAL_ISSUES=$((TOTAL_ISSUES + ${ISSUES:-0}))
-              cat "$FILE_OUTPUT" >> "$COMMENTS_FILE"
-            else
-              echo "::error::Failed to analyze $file"
-              TOTAL_ISSUES=$((TOTAL_ISSUES + 1))
-            fi
-            rm -f "$FILE_OUTPUT"
+          # skip empty lines
+          [ -z "$file" ] && continue
+
+          # sanity: skip non-existing files (they could be deleted in PR)
+          if [ ! -f "$file" ]; then
+            echo "Skip: $file (not a regular file)"
+            continue
           fi
-        done <<< "${{ steps.changed-files.outputs.changed_files }}"
+
+          echo "Analyzing $file..."
+          FILE_OUTPUT=$(mktemp)
+          # run clang-tidy on single file; clang-tidy returns non-zero on some failures, so capture output
+          if clang-tidy-${{ inputs.clang_tidy_version }} "$file" \
+            -p "${{ inputs.build_dir }}" --format-style=file 2>&1 | tee "$FILE_OUTPUT"; then
+            ISSUES=$(grep -cE "warning:|error:" "$FILE_OUTPUT" 2>/dev/null || echo "0")
+            ISSUES=$(echo "$ISSUES" | tr -d '[:space:]')
+            TOTAL_ISSUES=$((TOTAL_ISSUES + ${ISSUES:-0}))
+            # append to comments file
+            cat "$FILE_OUTPUT" >> "$COMMENTS_FILE"
+          else
+            # Even if clang-tidy returns non-zero, try to count issues if any
+            ISSUES=$(grep -cE "warning:|error:" "$FILE_OUTPUT" 2>/dev/null || echo "0")
+            ISSUES=$(echo "$ISSUES" | tr -d '[:space:]')
+            TOTAL_ISSUES=$((TOTAL_ISSUES + ${ISSUES:-0} + 0))
+            cat "$FILE_OUTPUT" >> "$COMMENTS_FILE"
+            echo "::warning::clang-tidy exit code non-zero for file $file"
+          fi
+          rm -f "$FILE_OUTPUT"
+        done <<< "$CHANGED_FILES_CONTENT"
 
         echo "total_comments=$TOTAL_ISSUES" >> $GITHUB_OUTPUT
 

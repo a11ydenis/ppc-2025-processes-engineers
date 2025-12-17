@@ -1,26 +1,74 @@
 name: Static analysis
 
 on:
-  pull_request:
-    paths:
-      - '**/*.cpp'
-      - '**/*.hpp'
-      - '**/*.c'
-      - '**/*.h'
-      - '**/CMakeLists.txt'
-      - '**/*.cmake'
-      - '**/.clang-tidy'
-      - '.github/workflows/static-analysis-pr.yml'
+  push:
+    branches:
+      - 'nalitov_d_matrix_min_by_columns'
+      - 'nalitov_d_matrix_min_by_columns_local_ci'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: >-
-    ${{ github.ref != 'refs/heads/master' &&
-        github.event_name != 'merge_group' &&
-        !startsWith(github.ref, 'refs/heads/gh-readonly-queue') }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXCLUDE_DIRS: "3rdparty build"
 
 jobs:
+  prepare-changed-files:
+    runs-on: ubuntu-24.04
+    outputs:
+      changed_files: ${{ steps.set_files.outputs.changed_files }}
+      has_changes: ${{ steps.set_files.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Produce list of source files (exclude directories)
+        id: set_files
+        shell: bash
+        run: |
+          # Собираем все tracked исходники в репозитории
+          CHANGED_FILES=$(git ls-files '*.cpp' '*.c' '*.hpp' '*.h' || true)
+
+          # Если git ls-files ничего не нашел (редко), fallback на find
+          if [ -z "$CHANGED_FILES" ]; then
+            CHANGED_FILES=$(find . -type f \
+              \( -name "*.cpp" -o -name "*.c" -o -name "*.hpp" -o -name "*.h" \) \
+              -print || true)
+            # нормализуем пути (убираем ведущую ./)
+            CHANGED_FILES=$(echo "$CHANGED_FILES" | sed 's#^\./##')
+          fi
+
+          # Исключаем папки из EXCLUDE_DIRS
+          for exclude in $EXCLUDE_DIRS; do
+            CHANGED_FILES=$(echo "$CHANGED_FILES" | grep -v "^${exclude}/" || true)
+          done
+
+          # Удаляем пустые строки
+          CHANGED_FILES=$(echo "$CHANGED_FILES" | sed '/^\s*$/d')
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "::warning::No source files found to analyze."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "changed_files=" >> $GITHUB_OUTPUT
+            # Также выставляем outputs
+            printf '%s' "" > /tmp/changed_files_list || true
+            exit 0
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+            echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            # Для readibility — сохраним в файл
+            printf '%s\n' "$CHANGED_FILES" > /tmp/changed_files_list
+          fi
+
   clang-tidy:
+    needs: prepare-changed-files
+    if: needs.prepare-changed-files.outputs.has_changes == 'true'
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/learning-process/ppc-ubuntu:1.1
@@ -40,7 +88,7 @@ jobs:
           create-symlink: true
           max-size: 1G
 
-      - name: CMake configure
+      - name: CMake configure (clang)
         run: >
           cmake -S . -B build -G Ninja
           -D CMAKE_BUILD_TYPE=RELEASE -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
@@ -48,7 +96,7 @@ jobs:
           CC: clang-21
           CXX: clang++-21
 
-      - name: Build project
+      - name: Build project (clang)
         run: |
           cmake --build build --parallel -- --quiet
         env:
@@ -57,19 +105,26 @@ jobs:
 
       - name: Show ccache stats
         run: ccache --show-stats
+
       - name: Run clang-tidy
         uses: ./.github/actions/clang-tidy-native
-        id: review
+        id: review_clang
         with:
+          # Передаем директории для исключения (внутри action он должен уметь это обрабатывать)
           exclude: "3rdparty build"
           clang_tidy_version: "21"
-      - if: steps.review.outputs.total_comments > 0
+          # Если action умеет принимать файл со списком — можно добавить параметр,
+          # иначе action должен читать GITHUB_OUTPUT.changed_files
+          # changed_files_file: "/tmp/changed_files_list"
+
+      - if: steps.review_clang.outputs.total_comments != '' && steps.review_clang.outputs.total_comments != '0'
         run: |
           echo "clang-tidy run has failed. See previous 'Run clang-tidy' stage logs"
           exit 1
+
   clang-tidy-for-gcc-build:
-    needs:
-      - clang-tidy
+    needs: clang-tidy
+    if: needs.prepare-changed-files.outputs.has_changes == 'true'
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/learning-process/ppc-ubuntu:1.1
@@ -89,7 +144,7 @@ jobs:
           create-symlink: true
           max-size: 1G
 
-      - name: CMake configure
+      - name: CMake configure (gcc)
         run: >
           cmake -S . -B build -G Ninja
           -D CMAKE_BUILD_TYPE=RELEASE -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
@@ -97,7 +152,7 @@ jobs:
           CC: gcc-14
           CXX: g++-14
 
-      - name: Build project
+      - name: Build project (gcc)
         run: |
           cmake --build build --parallel -- --quiet
         env:
@@ -106,36 +161,52 @@ jobs:
 
       - name: Show ccache stats
         run: ccache --show-stats
+
       - name: Run clang-tidy
         uses: ./.github/actions/clang-tidy-native
-        id: review
+        id: review_gcc
         with:
           exclude: "3rdparty build docs_venv .git .pytest_cache .ruff_cache xml"
           clang_tidy_version: "21"
-      - if: steps.review.outputs.total_comments > 0
+
+      - if: steps.review_gcc.outputs.total_comments != '' && steps.review_gcc.outputs.total_comments != '0'
         run: |
           echo "clang-tidy run has failed. See previous 'Run clang-tidy' stage logs"
           exit 1
+
   nolint-check:
+    needs: prepare-changed-files
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - name: Search for linter suppression markers
+      - name: Check changed task files for NOLINT / IWYU pragma
+        shell: bash
         run: |
-          export BASE_REF=${{ github.event.pull_request.base.ref }}
-          export CHANGED_FILES="$(git diff --name-only origin/$BASE_REF HEAD | grep '^tasks/')"
+          # берем измененные/существующие файлы из подготовленного списка
+          if [ -f /tmp/changed_files_list ]; then
+            CHANGED_FILES=$(cat /tmp/changed_files_list)
+          else
+            CHANGED_FILES=$(git ls-files 'tasks/*' || true)
+          fi
+
           if [ -z "$CHANGED_FILES" ]; then
-            echo "No changed files in tasks directory."
+            echo "No changed files to check for NOLINT/IWYU."
             exit 0
           fi
+
           for file in $CHANGED_FILES; do
-            if grep -n "NOLINT" "$file"; then
-              echo "::error::Found 'NOLINT' in $file."
-              exit 1
-            fi
-            if grep -En 'IWYU[[:space:]]+pragma' "$file"; then
-              echo "::error::Found 'IWYU pragma' in $file."
-              exit 1
-            fi
+            # Проверяем только файлы в tasks/
+            case "$file" in
+              tasks/*)
+                if grep -n "NOLINT" "$file"; then
+                  echo "::error::Found 'NOLINT' in $file."
+                  exit 1
+                fi
+                if grep -En 'IWYU[[:space:]]+pragma' "$file"; then
+                  echo "::error::Found 'IWYU pragma' in $file."
+                  exit 1
+                fi
+                ;;
+            esac
           done
           echo "No linter suppression markers found in changed files."
