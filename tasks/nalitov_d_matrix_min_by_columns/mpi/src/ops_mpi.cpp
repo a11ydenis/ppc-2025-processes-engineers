@@ -6,8 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <vector>
 #include <utility>
+#include <vector>
 
 #include "nalitov_d_matrix_min_by_columns/common/include/common.hpp"
 
