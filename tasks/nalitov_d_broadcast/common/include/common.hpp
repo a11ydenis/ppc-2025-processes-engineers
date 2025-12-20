@@ -12,7 +12,7 @@ namespace nalitov_d_broadcast {
 using InTypeVariant = std::variant<std::vector<int>, std::vector<float>, std::vector<double>>;
 
 struct InType {
-  InTypeVariant data{};
+  InTypeVariant data;
   int root{0};
 };
 

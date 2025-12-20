@@ -16,7 +16,7 @@ class NalitovDBroadcastMPI : public BaseTask {
 
  private:
   template <typename T>
-  bool ProcessVector(const InType &input, int rank, int root, MPI_Datatype mpi_type);
+  bool ProcessVector(const InType &input_data, int proc_rank, int root_proc, MPI_Datatype mpi_dtype);
 
   bool ValidationImpl() override;
   bool PreProcessingImpl() override;

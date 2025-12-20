@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstddef>
 #include <variant>
 #include <vector>
 
@@ -20,7 +21,7 @@ class NalitovDRunPerfTestProcesses : public ppc::util::BaseRunPerfTests<InType, 
     for (int idx = 0; idx < kArraySize_; ++idx) {
       test_data[idx] = static_cast<double>(idx) * 0.75;
     }
-    test_input_ = InType{InTypeVariant{test_data}, 0};
+    test_input_ = InType{.data = InTypeVariant{test_data}, .root = 0};
   }
 
   bool CheckTestOutputData(OutType &result) final {
