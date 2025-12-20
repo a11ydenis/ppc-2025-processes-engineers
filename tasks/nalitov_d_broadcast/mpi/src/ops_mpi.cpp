@@ -186,19 +186,20 @@ bool NalitovDBroadcastMPI::ProcessVector(const InType &input_data, int proc_rank
 
   DistributeInteger(&elem_count, 0, MPI_COMM_WORLD);
 
-  if (elem_count == 0) {
-    return true;
-  }
-
   auto &output_result = GetOutput();
 
   if (proc_rank != 0) {
     if (!std::holds_alternative<std::vector<T>>(output_result)) {
-      output_result = InTypeVariant{std::vector<T>(elem_count, T{})};
+      output_result = InTypeVariant{std::vector<T>()};
     }
   }
 
   auto &dest_buffer = std::get<std::vector<T>>(output_result);
+
+  if (elem_count == 0) {
+    dest_buffer.clear();
+    return true;
+  }
 
   if (static_cast<int>(dest_buffer.size()) != elem_count) {
     dest_buffer.resize(elem_count);
