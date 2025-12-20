@@ -16,21 +16,9 @@ namespace {
 
 constexpr int kBroadcastTag = 0;
 
-int TreeBroadcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm) {
+int ValidateBroadcastArgs(const void *buffer, int count, int root, int comm_size) {
   if (count < 0) {
     return MPI_ERR_COUNT;
-  }
-
-  int comm_size = 0;
-  int status = MPI_Comm_size(comm, &comm_size);
-  if (status != MPI_SUCCESS) {
-    return status;
-  }
-
-  int my_rank = 0;
-  status = MPI_Comm_rank(comm, &my_rank);
-  if (status != MPI_SUCCESS) {
-    return status;
   }
 
   if (comm_size <= 0) {
@@ -49,39 +37,59 @@ int TreeBroadcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_
     return MPI_ERR_BUFFER;
   }
 
-  int type_size = 0;
-  status = MPI_Type_size(datatype, &type_size);
-  if (status != MPI_SUCCESS) {
-    return status;
+  return MPI_SUCCESS;
+}
+
+int TreeBroadcastStep(void *buffer, int count, MPI_Datatype datatype, int root, int virtual_rank, int mask,
+                      int comm_size, MPI_Comm comm) {
+  if (virtual_rank < mask) {
+    const int dest_virtual = virtual_rank + mask;
+    if (dest_virtual >= comm_size) {
+      return MPI_SUCCESS;
+    }
+
+    const int dest_rank = (dest_virtual + root) % comm_size;
+    return MPI_Send(buffer, count, datatype, dest_rank, kBroadcastTag, comm);
   }
 
-  if (type_size <= 0) {
+  if (virtual_rank < (mask << 1)) {
+    const int src_virtual = virtual_rank - mask;
+    const int src_rank = (src_virtual + root) % comm_size;
+    return MPI_Recv(buffer, count, datatype, src_rank, kBroadcastTag, comm, MPI_STATUS_IGNORE);
+  }
+
+  return MPI_SUCCESS;
+}
+
+int TreeBroadcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm) {
+  int comm_size = 0;
+  if (MPI_Comm_size(comm, &comm_size) != MPI_SUCCESS) {
+    return MPI_ERR_COMM;
+  }
+
+  int my_rank = 0;
+  if (MPI_Comm_rank(comm, &my_rank) != MPI_SUCCESS) {
+    return MPI_ERR_COMM;
+  }
+
+  const int validation = ValidateBroadcastArgs(buffer, count, root, comm_size);
+  if (validation != MPI_SUCCESS) {
+    return validation;
+  }
+
+  int type_size = 0;
+  if (MPI_Type_size(datatype, &type_size) != MPI_SUCCESS || type_size <= 0) {
     return MPI_ERR_TYPE;
   }
 
   const int virtual_rank = (my_rank - root + comm_size) % comm_size;
 
-  int mask = 1;
-  while (mask < comm_size) {
-    if (virtual_rank < mask) {
-      const int dest_virtual = virtual_rank + mask;
-      if (dest_virtual < comm_size) {
-        const int dest_rank = (dest_virtual + root) % comm_size;
-        status = MPI_Send(buffer, count, datatype, dest_rank, kBroadcastTag, comm);
-        if (status != MPI_SUCCESS) {
-          return status;
-        }
-      }
-    } else if (virtual_rank < (mask << 1)) {
-      const int src_virtual = virtual_rank - mask;
-      const int src_rank = (src_virtual + root) % comm_size;
-      MPI_Status recv_status{};
-      status = MPI_Recv(buffer, count, datatype, src_rank, kBroadcastTag, comm, &recv_status);
-      if (status != MPI_SUCCESS) {
-        return status;
-      }
+  for (int mask = 1; mask < comm_size; mask <<= 1) {
+    const int status = TreeBroadcastStep(buffer, count, datatype, root, virtual_rank, mask, comm_size, comm);
+
+    if (status != MPI_SUCCESS) {
+      return status;
     }
-    mask <<= 1;
   }
 
   return MPI_SUCCESS;
