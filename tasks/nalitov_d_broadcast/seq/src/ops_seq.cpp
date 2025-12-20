@@ -49,16 +49,17 @@ NalitovDBroadcastSEQ::NalitovDBroadcastSEQ(const InType &in) {
 bool NalitovDBroadcastSEQ::ValidationImpl() {
   const auto &src_data = GetInput();
 
-  bool is_valid = false;
   if (std::holds_alternative<std::vector<int>>(src_data.data)) {
-    is_valid = !std::get<std::vector<int>>(src_data.data).empty();
-  } else if (std::holds_alternative<std::vector<float>>(src_data.data)) {
-    is_valid = !std::get<std::vector<float>>(src_data.data).empty();
-  } else if (std::holds_alternative<std::vector<double>>(src_data.data)) {
-    is_valid = !std::get<std::vector<double>>(src_data.data).empty();
+    return true;
+  }
+  if (std::holds_alternative<std::vector<float>>(src_data.data)) {
+    return true;
+  }
+  if (std::holds_alternative<std::vector<double>>(src_data.data)) {
+    return true;
   }
 
-  return is_valid;
+  return false;
 }
 
 bool NalitovDBroadcastSEQ::PreProcessingImpl() {

@@ -71,7 +71,7 @@ void DistributeData(void *data_ptr, int elem_count, MPI_Datatype mpi_dtype, int 
 }
 
 void DistributeInteger(int *val, int root_proc, MPI_Comm comm) {
-  DistributeData(val, 1, MPI_INT, root_proc, comm);
+  DistributeData(static_cast<void *>(val), 1, MPI_INT, root_proc, comm);
 }
 
 }  // namespace
@@ -116,17 +116,17 @@ bool NalitovDBroadcastMPI::ValidationImpl() {
 
     if (proc_rank == 0) {
       const auto &input_data = GetInput();
-      bool has_data = false;
+      bool valid_type = false;
 
       if (std::holds_alternative<std::vector<int>>(input_data.data)) {
-        has_data = !std::get<std::vector<int>>(input_data.data).empty();
+        valid_type = true;
       } else if (std::holds_alternative<std::vector<float>>(input_data.data)) {
-        has_data = !std::get<std::vector<float>>(input_data.data).empty();
+        valid_type = true;
       } else if (std::holds_alternative<std::vector<double>>(input_data.data)) {
-        has_data = !std::get<std::vector<double>>(input_data.data).empty();
+        valid_type = true;
       }
 
-      if (!has_data) {
+      if (!valid_type) {
         return false;
       }
 
