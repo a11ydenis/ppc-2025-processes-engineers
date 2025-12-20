@@ -191,6 +191,13 @@ bool NalitovDBroadcastMPI::ProcessVector(const InType &input_data, int proc_rank
   }
 
   auto &output_result = GetOutput();
+
+  if (proc_rank != 0) {
+    if (!std::holds_alternative<std::vector<T>>(output_result)) {
+      output_result = InTypeVariant{std::vector<T>(elem_count, T{})};
+    }
+  }
+
   auto &dest_buffer = std::get<std::vector<T>>(output_result);
 
   if (static_cast<int>(dest_buffer.size()) != elem_count) {
