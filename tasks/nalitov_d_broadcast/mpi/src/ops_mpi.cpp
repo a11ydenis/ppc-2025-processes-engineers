@@ -2,71 +2,219 @@
 
 #include <mpi.h>
 
-#include <numeric>
+#include <algorithm>
+#include <cstring>
+#include <stdexcept>
+#include <variant>
 #include <vector>
 
 #include "nalitov_d_broadcast/common/include/common.hpp"
-#include "util/include/util.hpp"
 
 namespace nalitov_d_broadcast {
+
+namespace {
+
+void DistributeData(void *data_ptr, int elem_count, MPI_Datatype mpi_dtype, int root_proc, MPI_Comm comm) {
+  if (elem_count == 0) {
+    MPI_Barrier(comm);
+    return;
+  }
+
+  int comm_size = 0;
+  MPI_Comm_size(comm, &comm_size);
+
+  int my_rank = 0;
+  MPI_Comm_rank(comm, &my_rank);
+
+  if (comm_size <= 1) {
+    return;
+  }
+
+  int dtype_size = 0;
+  MPI_Type_size(mpi_dtype, &dtype_size);
+  size_t buffer_size = static_cast<size_t>(elem_count) * static_cast<size_t>(dtype_size);
+
+  std::vector<unsigned char> work_buffer(buffer_size);
+
+  if (my_rank == root_proc) {
+    std::memcpy(work_buffer.data(), data_ptr, buffer_size);
+  }
+
+  int tree_levels = 0;
+  int remaining = comm_size;
+  while (remaining > 1) {
+    remaining >>= 1;
+    tree_levels++;
+  }
+
+  for (int current_level = 0; current_level < tree_levels; current_level++) {
+    int level_step = 1 << current_level;
+    int mapped_rank = (my_rank - root_proc + comm_size) % comm_size;
+
+    if ((mapped_rank % (2 * level_step)) == 0) {
+      int dest_mapped = mapped_rank + level_step;
+      if (dest_mapped < comm_size) {
+        int dest_rank = (dest_mapped + root_proc) % comm_size;
+        MPI_Send(work_buffer.data(), elem_count, mpi_dtype, dest_rank, 0, comm);
+      }
+    } else if ((mapped_rank % level_step) == 0) {
+      int src_mapped = mapped_rank - level_step;
+      int src_rank = (src_mapped + root_proc) % comm_size;
+      MPI_Status status{};
+      MPI_Recv(work_buffer.data(), elem_count, mpi_dtype, src_rank, 0, comm, &status);
+    }
+  }
+
+  if (my_rank != root_proc) {
+    std::memcpy(data_ptr, work_buffer.data(), buffer_size);
+  }
+}
+
+void DistributeInteger(int *val, int root_proc, MPI_Comm comm) {
+  DistributeData(val, 1, MPI_INT, root_proc, comm);
+}
+
+}  // namespace
 
 NalitovDBroadcastMPI::NalitovDBroadcastMPI(const InType &in) {
   SetTypeOfTask(GetStaticTypeOfTask());
   GetInput() = in;
-  GetOutput() = 0;
+
+  int proc_rank = 0;
+  int init_flag = 0;
+  MPI_Initialized(&init_flag);
+
+  if (init_flag != 0) {
+    MPI_Comm_rank(MPI_COMM_WORLD, &proc_rank);
+  }
+
+  if (proc_rank == 0) {
+    if (std::holds_alternative<std::vector<int>>(in.data)) {
+      const auto &src_vec = std::get<std::vector<int>>(in.data);
+      GetOutput() = InTypeVariant{std::vector<int>(src_vec.size(), 0)};
+    } else if (std::holds_alternative<std::vector<float>>(in.data)) {
+      const auto &src_vec = std::get<std::vector<float>>(in.data);
+      GetOutput() = InTypeVariant{std::vector<float>(src_vec.size(), 0.0F)};
+    } else if (std::holds_alternative<std::vector<double>>(in.data)) {
+      const auto &src_vec = std::get<std::vector<double>>(in.data);
+      GetOutput() = InTypeVariant{std::vector<double>(src_vec.size(), 0.0)};
+    } else {
+      throw std::runtime_error("Unsupported data type");
+    }
+  }
 }
 
 bool NalitovDBroadcastMPI::ValidationImpl() {
-  return (GetInput() > 0) && (GetOutput() == 0);
-}
+  int proc_rank = 0;
+  int init_flag = 0;
+  MPI_Initialized(&init_flag);
 
-bool NalitovDBroadcastMPI::PreProcessingImpl() {
-  GetOutput() = 2 * GetInput();
-  return GetOutput() > 0;
-}
+  if (init_flag != 0) {
+    MPI_Comm_rank(MPI_COMM_WORLD, &proc_rank);
+    int comm_size = 0;
+    MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
 
-bool NalitovDBroadcastMPI::RunImpl() {
-  auto input = GetInput();
-  if (input == 0) {
-    return false;
-  }
+    if (proc_rank == 0) {
+      const auto &input_data = GetInput();
+      bool has_data = false;
 
-  for (InType i = 0; i < GetInput(); i++) {
-    for (InType j = 0; j < GetInput(); j++) {
-      for (InType k = 0; k < GetInput(); k++) {
-        std::vector<InType> tmp(i + j + k, 1);
-        GetOutput() += std::accumulate(tmp.begin(), tmp.end(), 0);
-        GetOutput() -= i + j + k;
+      if (std::holds_alternative<std::vector<int>>(input_data.data)) {
+        has_data = !std::get<std::vector<int>>(input_data.data).empty();
+      } else if (std::holds_alternative<std::vector<float>>(input_data.data)) {
+        has_data = !std::get<std::vector<float>>(input_data.data).empty();
+      } else if (std::holds_alternative<std::vector<double>>(input_data.data)) {
+        has_data = !std::get<std::vector<double>>(input_data.data).empty();
+      }
+
+      if (!has_data) {
+        return false;
+      }
+
+      if (input_data.root < 0 || input_data.root >= comm_size) {
+        return false;
       }
     }
   }
+  return true;
+}
 
-  const int num_threads = ppc::util::GetNumThreads();
-  GetOutput() *= num_threads;
+bool NalitovDBroadcastMPI::PreProcessingImpl() {
+  return true;
+}
 
-  int rank = 0;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+bool NalitovDBroadcastMPI::RunImpl() {
+  try {
+    const auto &input_data = GetInput();
+    int proc_rank = 0;
+    int root_proc = 0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &proc_rank);
 
-  if (rank == 0) {
-    GetOutput() /= num_threads;
-  } else {
-    int counter = 0;
-    for (int i = 0; i < num_threads; i++) {
-      counter++;
+    if (proc_rank == 0) {
+      root_proc = input_data.root;
+    }
+    DistributeInteger(&root_proc, 0, MPI_COMM_WORLD);
+
+    if (std::holds_alternative<std::vector<int>>(input_data.data)) {
+      return ProcessVector<int>(input_data, proc_rank, root_proc, MPI_INT);
     }
 
-    if (counter != 0) {
-      GetOutput() /= counter;
+    if (std::holds_alternative<std::vector<float>>(input_data.data)) {
+      return ProcessVector<float>(input_data, proc_rank, root_proc, MPI_FLOAT);
+    }
+
+    if (std::holds_alternative<std::vector<double>>(input_data.data)) {
+      return ProcessVector<double>(input_data, proc_rank, root_proc, MPI_DOUBLE);
+    }
+
+    return false;
+  } catch (...) {
+    return false;
+  }
+}
+
+template <typename T>
+bool NalitovDBroadcastMPI::ProcessVector(const InType &input_data, int proc_rank, int root_proc,
+                                         MPI_Datatype mpi_dtype) {
+  int elem_count = 0;
+  if (proc_rank == 0) {
+    if (std::holds_alternative<std::vector<T>>(input_data.data)) {
+      elem_count = static_cast<int>(std::get<std::vector<T>>(input_data.data).size());
+    } else {
+      return false;
     }
   }
 
-  MPI_Barrier(MPI_COMM_WORLD);
-  return GetOutput() > 0;
+  DistributeInteger(&elem_count, 0, MPI_COMM_WORLD);
+
+  if (elem_count == 0) {
+    return true;
+  }
+
+  auto &output_result = GetOutput();
+  auto &dest_buffer = std::get<std::vector<T>>(output_result);
+
+  if (static_cast<int>(dest_buffer.size()) != elem_count) {
+    dest_buffer.resize(elem_count);
+  }
+
+  if (proc_rank == 0) {
+    const auto &src_buffer = std::get<std::vector<T>>(input_data.data);
+    std::ranges::copy(src_buffer, dest_buffer.begin());
+  }
+
+  DistributeData(dest_buffer.data(), elem_count, mpi_dtype, root_proc, MPI_COMM_WORLD);
+
+  return true;
 }
 
 bool NalitovDBroadcastMPI::PostProcessingImpl() {
-  GetOutput() -= GetInput();
-  return GetOutput() > 0;
+  return true;
 }
+
+template bool NalitovDBroadcastMPI::ProcessVector<int>(const InType &input, int rank, int root, MPI_Datatype mpi_type);
+template bool NalitovDBroadcastMPI::ProcessVector<float>(const InType &input, int rank, int root,
+                                                         MPI_Datatype mpi_type);
+template bool NalitovDBroadcastMPI::ProcessVector<double>(const InType &input, int rank, int root,
+                                                          MPI_Datatype mpi_type);
 
 }  // namespace nalitov_d_broadcast

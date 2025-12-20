@@ -1,5 +1,7 @@
 #pragma once
 
+#include <mpi.h>
+
 #include "nalitov_d_broadcast/common/include/common.hpp"
 #include "task/include/task.hpp"
 
@@ -13,6 +15,9 @@ class NalitovDBroadcastMPI : public BaseTask {
   explicit NalitovDBroadcastMPI(const InType &in);
 
  private:
+  template <typename T>
+  bool ProcessVector(const InType &input, int rank, int root, MPI_Datatype mpi_type);
+
   bool ValidationImpl() override;
   bool PreProcessingImpl() override;
   bool RunImpl() override;
