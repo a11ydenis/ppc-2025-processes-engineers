@@ -7,6 +7,8 @@
 
 namespace nalitov_d_broadcast {
 
+int NalitovDBroadcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+
 class NalitovDBroadcastMPI : public BaseTask {
  public:
   static constexpr ppc::task::TypeOfTask GetStaticTypeOfTask() {

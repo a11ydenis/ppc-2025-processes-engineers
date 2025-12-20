@@ -32,94 +32,104 @@ class NalitovDRunFuncTestsProcesses : public ppc::util::BaseRunFuncTests<InType,
     std::string task_name = std::get<1>(param);
     uses_mpi_ = (task_name.find("mpi") != std::string::npos);
 
+    int world_size = 1;
+    if (uses_mpi_) {
+      MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+      if (world_size <= 0) {
+        world_size = 1;
+      }
+    }
+
+    const int root = (uses_mpi_ && world_size > 0) ? (test_id % world_size) : 0;
+
     switch (test_id) {
       case 1: {
         std::vector<double> input = {2.5, 3.7, 4.9, 6.1, 7.3};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_double_ = input;
         mpi_dtype_ = MPI_DOUBLE;
       } break;
       case 2: {
         std::vector<int> input = {10, 20, 30, 40, 50};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_int_ = input;
         mpi_dtype_ = MPI_INT;
       } break;
       case 3: {
         std::vector<float> input = {0.5F, 1.5F, 2.5F, 3.5F, 4.5F};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_float_ = input;
         mpi_dtype_ = MPI_FLOAT;
       } break;
       case 4: {
         std::vector<int> input = {5, -10, 15, -20, 25};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_int_ = input;
         mpi_dtype_ = MPI_INT;
       } break;
       case 5: {
         std::vector<double> input = {-2.1, -3.2, -4.3, -5.4, -6.5};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_double_ = input;
         mpi_dtype_ = MPI_DOUBLE;
       } break;
       case 6: {
         std::vector<float> input = {-0.7F, 1.3F, -2.1F, 3.9F, -4.5F};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_float_ = input;
         mpi_dtype_ = MPI_FLOAT;
       } break;
       case 7: {
         std::vector<int> input = {-3, 6, -9, 12, -15};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_int_ = input;
         mpi_dtype_ = MPI_INT;
       } break;
       case 8: {
         std::vector<double> input = {0.1, -0.2, 0.3, -0.4, 0.5};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_double_ = input;
         mpi_dtype_ = MPI_DOUBLE;
       } break;
       case 9: {
         std::vector<float> input = {2.2F, -3.3F, 4.4F, -5.5F, 6.6F};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_float_ = input;
         mpi_dtype_ = MPI_FLOAT;
       } break;
       case 10: {
         std::vector<double> input = {};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_double_ = input;
         mpi_dtype_ = MPI_DOUBLE;
       } break;
       case 11: {
         std::vector<int> input = {0, 0, 0, 0};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_int_ = input;
         mpi_dtype_ = MPI_INT;
       } break;
       case 12: {
         std::vector<double> input = {1.11, 2.22, 3.33, 4.44, 5.55};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_double_ = input;
         mpi_dtype_ = MPI_DOUBLE;
       } break;
       case 13: {
         std::vector<float> input = {1.25F, 2.75F, 3.25F, 4.75F, 5.25F};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_float_ = input;
         mpi_dtype_ = MPI_FLOAT;
       } break;
       case 14: {
         std::vector<int> input = {7, 14, 21, 28, 35};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_int_ = input;
         mpi_dtype_ = MPI_INT;
       } break;
       case 15: {
         std::vector<double> input = {-1.5, 2.5, -3.5, 4.5, -5.5};
-        input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+        input_data_ = InType{.data = InTypeVariant{input}, .root = root};
         reference_double_ = input;
         mpi_dtype_ = MPI_DOUBLE;
       } break;
@@ -133,21 +143,21 @@ class NalitovDRunFuncTestsProcesses : public ppc::util::BaseRunFuncTests<InType,
             for (int i = 0; i < arr_size; i++) {
               input_int[i] = i * 3;
             }
-            input_data_ = InType{.data = InTypeVariant{input_int}, .root = 0};
+            input_data_ = InType{.data = InTypeVariant{input_int}, .root = root};
             reference_int_ = input_int;
             mpi_dtype_ = MPI_INT;
           } else if (task_name.find("float") != std::string::npos) {
             for (int i = 0; i < arr_size; i++) {
               input_float[i] = static_cast<float>(i) * 2.3F;
             }
-            input_data_ = InType{.data = InTypeVariant{input_float}, .root = 0};
+            input_data_ = InType{.data = InTypeVariant{input_float}, .root = root};
             reference_float_ = input_float;
             mpi_dtype_ = MPI_FLOAT;
           } else {
             for (int i = 0; i < arr_size; i++) {
               input[i] = static_cast<double>(i) * 2.1;
             }
-            input_data_ = InType{.data = InTypeVariant{input}, .root = 0};
+            input_data_ = InType{.data = InTypeVariant{input}, .root = root};
             reference_double_ = input;
             mpi_dtype_ = MPI_DOUBLE;
           }
