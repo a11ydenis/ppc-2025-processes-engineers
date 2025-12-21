@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "nalitov_d_binary/common/include/common.hpp"
@@ -12,6 +13,7 @@ class NalitovDBinaryMPI : public BaseTask {
   static constexpr ppc::task::TypeOfTask GetStaticTypeOfTask() {
     return ppc::task::TypeOfTask::kMPI;
   }
+
   explicit NalitovDBinaryMPI(const InType &in);
 
  private:

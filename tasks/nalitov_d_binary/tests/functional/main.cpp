@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <string>
 #include <tuple>
-#include <utility>
 #include <vector>
 
 #include "nalitov_d_binary/common/include/common.hpp"
@@ -57,8 +56,8 @@ Pattern MakeTwoPointPattern() {
 Pattern MakeHorizontalLinePattern() {
   Pattern pattern;
   pattern.image = MakeBlankImage(7, 3);
-  for (int x = 2; x <= 4; ++x) {
-    SetPixel(pattern.image, x, 1, 190);
+  for (int col = 2; col <= 4; ++col) {
+    SetPixel(pattern.image, col, 1, 190);
   }
   pattern.expected_hulls = {{{2, 1}, {4, 1}}};
   return pattern;
@@ -67,9 +66,9 @@ Pattern MakeHorizontalLinePattern() {
 Pattern MakeFilledRectanglePattern() {
   Pattern pattern;
   pattern.image = MakeBlankImage(8, 8);
-  for (int y = 2; y <= 5; ++y) {
-    for (int x = 3; x <= 6; ++x) {
-      SetPixel(pattern.image, x, y, 255);
+  for (int row = 2; row <= 5; ++row) {
+    for (int col = 3; col <= 6; ++col) {
+      SetPixel(pattern.image, col, row, 255);
     }
   }
   pattern.expected_hulls = {{{3, 2}, {6, 2}, {6, 5}, {3, 5}}};
@@ -79,10 +78,10 @@ Pattern MakeFilledRectanglePattern() {
 Pattern MakeDiamondPattern() {
   Pattern pattern;
   pattern.image = MakeBlankImage(9, 9);
-  for (int y = 0; y < 9; ++y) {
-    for (int x = 0; x < 9; ++x) {
-      if (std::abs(x - 4) + std::abs(y - 4) <= 4) {
-        SetPixel(pattern.image, x, y, 255);
+  for (int row = 0; row < 9; ++row) {
+    for (int col = 0; col < 9; ++col) {
+      if (std::abs(col - 4) + std::abs(row - 4) <= 4) {
+        SetPixel(pattern.image, col, row, 255);
       }
     }
   }
@@ -91,7 +90,7 @@ Pattern MakeDiamondPattern() {
 }
 
 const std::vector<Pattern> &GetAllPatterns() {
-  static const std::vector<Pattern> patterns = []() {
+  static const std::vector<Pattern> kPatterns = []() {
     std::vector<Pattern> result;
     result.push_back(MakeSinglePointPattern());
     result.push_back(MakeTwoPointPattern());
@@ -100,7 +99,7 @@ const std::vector<Pattern> &GetAllPatterns() {
     result.push_back(MakeDiamondPattern());
     return result;
   }();
-  return patterns;
+  return kPatterns;
 }
 
 const Pattern &GetPattern(int id) {
@@ -158,15 +157,15 @@ class NalitovDBinaryFuncTests : public ppc::util::BaseRunFuncTests<InType, OutTy
 
  protected:
   bool CheckTestOutputData(OutType &output_data) final {
-    const auto pattern_id =
-        std::get<0>(std::get<static_cast<size_t>(ppc::util::GTestParamIndex::kTestParams)>(GetParam()));
+    auto test_param = std::get<2>(GetParam());
+    int pattern_id = std::get<0>(test_param);
     const auto &pattern = GetPattern(pattern_id);
     return HullsMatch(pattern.expected_hulls, output_data.convex_hulls);
   }
 
   InType GetTestInputData() final {
-    const auto pattern_id =
-        std::get<0>(std::get<static_cast<size_t>(ppc::util::GTestParamIndex::kTestParams)>(GetParam()));
+    auto test_param = std::get<2>(GetParam());
+    int pattern_id = std::get<0>(test_param);
     return GetPattern(pattern_id).image;
   }
 };

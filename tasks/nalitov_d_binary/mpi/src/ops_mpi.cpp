@@ -312,9 +312,8 @@ void NalitovDBinaryMPI::ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixe
 }
 
 void NalitovDBinaryMPI::CollectGlobalHulls() {
-  MPI_Gatherv(local_image_.pixels.data(), counts_[rank_], MPI_UINT8_T,
-              rank_ == 0 ? full_image_.pixels.data() : nullptr, counts_.data(), displs_.data(), MPI_UINT8_T, 0,
-              MPI_COMM_WORLD);
+  MPI_Gatherv(local_image_.pixels.data(), counts_[rank_], MPI_UINT8_T, rank_ == 0 ? full_image_.pixels.data() : nullptr,
+              counts_.data(), displs_.data(), MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
   if (rank_ == 0) {
     DiscoverGlobalComponents(full_image_);

@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
 #include <vector>
 
 #include "nalitov_d_binary/common/include/common.hpp"
@@ -21,30 +21,30 @@ BinaryImage MakePerfImage(int size) {
   image.height = size;
   image.pixels.assign(static_cast<size_t>(size) * static_cast<size_t>(size), 0);
 
-  const int cx = size / 2;
-  const int cy = size / 2;
+  const int center_x = size / 2;
+  const int center_y = size / 2;
   const int radius = size / 5;
 
-  for (int y = -radius; y <= radius; ++y) {
-    for (int x = -radius; x <= radius; ++x) {
-      if ((x * x) + (y * y) <= radius * radius) {
-        const int px = cx + x;
-        const int py = cy + y;
+  for (int dy = -radius; dy <= radius; ++dy) {
+    for (int dx = -radius; dx <= radius; ++dx) {
+      if ((dx * dx) + (dy * dy) <= radius * radius) {
+        const int px = center_x + dx;
+        const int py = center_y + dy;
         if (px >= 0 && px < size && py >= 0 && py < size) {
-          image.pixels[static_cast<size_t>(py) * static_cast<size_t>(size) + static_cast<size_t>(px)] = 255;
+          image.pixels[(static_cast<size_t>(py) * static_cast<size_t>(size)) + static_cast<size_t>(px)] = 255;
         }
       }
     }
   }
 
-  for (int i = 0; i < size; ++i) {
-    image.pixels[static_cast<size_t>(i) * static_cast<size_t>(size) + static_cast<size_t>(i)] = 255;
-    image.pixels[static_cast<size_t>(i) * static_cast<size_t>(size) + static_cast<size_t>(size - 1 - i)] = 255;
+  for (int idx = 0; idx < size; ++idx) {
+    image.pixels[(static_cast<size_t>(idx) * static_cast<size_t>(size)) + static_cast<size_t>(idx)] = 255;
+    image.pixels[(static_cast<size_t>(idx) * static_cast<size_t>(size)) + static_cast<size_t>(size - 1 - idx)] = 255;
   }
 
-  for (int y = size / 4; y < 3 * size / 4; y += 3) {
-    for (int x = 0; x < size; ++x) {
-      image.pixels[static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)] = 255;
+  for (int row = size / 4; row < (3 * size) / 4; row += 3) {
+    for (int col = 0; col < size; ++col) {
+      image.pixels[(static_cast<size_t>(row) * static_cast<size_t>(size)) + static_cast<size_t>(col)] = 255;
     }
   }
 
@@ -56,21 +56,26 @@ bool ValidateHull(const std::vector<GridPoint> &hull, int width, int height) {
     return false;
   }
 
-  for (const auto &pt : hull) {
-    if (pt.x < 0 || pt.x >= width || pt.y < 0 || pt.y >= height) {
+  for (const auto &point : hull) {
+    if (point.x < 0 || point.x >= width || point.y < 0 || point.y >= height) {
       return false;
     }
   }
 
   if (hull.size() >= 3U) {
-    long long orientation = 0;
-    const size_t n = hull.size();
-    for (size_t i = 0; i < n; ++i) {
-      const GridPoint &a = hull[i];
-      const GridPoint &b = hull[(i + 1) % n];
-      const GridPoint &c = hull[(i + 2) % n];
-      const long long cross = (static_cast<long long>(b.x) - a.x) * (static_cast<long long>(c.y) - b.y) -
-                              (static_cast<long long>(b.y) - a.y) * (static_cast<long long>(c.x) - b.x);
+    int64_t orientation = 0;
+    const size_t count = hull.size();
+
+    for (size_t idx = 0; idx < count; ++idx) {
+      const GridPoint &a = hull[idx];
+      const GridPoint &b = hull[(idx + 1) % count];
+      const GridPoint &c = hull[(idx + 2) % count];
+
+      const int64_t cross = ((static_cast<int64_t>(b.x) - static_cast<int64_t>(a.x)) *
+                             (static_cast<int64_t>(c.y) - static_cast<int64_t>(b.y))) -
+                            ((static_cast<int64_t>(b.y) - static_cast<int64_t>(a.y)) *
+                             (static_cast<int64_t>(c.x) - static_cast<int64_t>(b.x)));
+
       if (cross != 0) {
         if (orientation == 0) {
           orientation = cross;
@@ -89,20 +94,15 @@ bool ValidateHull(const std::vector<GridPoint> &hull, int width, int height) {
 }
 
 bool ValidateOutput(const BinaryImage &output_data) {
-  for (const auto &hull : output_data.convex_hulls) {
-    if (!ValidateHull(hull, output_data.width, output_data.height)) {
-      return false;
-    }
-  }
-  return true;
+  return std::ranges::all_of(output_data.convex_hulls, [&](const std::vector<GridPoint> &hull) {
+    return ValidateHull(hull, output_data.width, output_data.height);
+  });
 }
 
 }  // namespace
 
 class NalitovDBinaryPerfTests : public ppc::util::BaseRunPerfTests<InType, OutType> {
  protected:
-  void SetUp() override {}
-
   bool CheckTestOutputData(OutType &output_data) final {
     return output_data.width == input_data_.width && output_data.height == input_data_.height &&
            ValidateOutput(output_data);
