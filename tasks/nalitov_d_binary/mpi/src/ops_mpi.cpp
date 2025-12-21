@@ -10,6 +10,7 @@
 #include <numeric>
 #include <queue>
 #include <ranges>
+#include <utility>
 #include <vector>
 
 #include "nalitov_d_binary/common/include/common.hpp"
@@ -30,6 +31,21 @@ int64_t Cross(const GridPoint &a, const GridPoint &b, const GridPoint &c) {
   const int64_t bcx = static_cast<int64_t>(c.x) - static_cast<int64_t>(b.x);
   const int64_t bcy = static_cast<int64_t>(c.y) - static_cast<int64_t>(b.y);
   return (abx * bcy) - (aby * bcx);
+}
+
+void TryVisitNeighborExtended(const std::vector<uint8_t> &extended_pixels, int width, int extended_height,
+                              int start_row, int ncol, int nrow, std::vector<bool> &visited,
+                              std::queue<GridPoint> &frontier) {
+  const int ext_nrow = nrow - start_row + 1;
+  if (ext_nrow < 0 || ext_nrow >= extended_height) {
+    return;
+  }
+  const size_t neighbor_idx = ToIndex(ncol, ext_nrow, width);
+  if (visited[neighbor_idx] || extended_pixels[neighbor_idx] == 0) {
+    return;
+  }
+  visited[neighbor_idx] = true;
+  frontier.emplace(ncol, nrow);
 }
 
 void BFSCollectGlobal(BinaryImage &image, int start_col, int start_row, std::vector<bool> &visited,
@@ -80,6 +96,8 @@ void BFSCollectExtended(const std::vector<uint8_t> &extended_pixels, int width, 
   out_touches_local = false;
   out_min_row = std::numeric_limits<int>::max();
 
+  const int max_valid_global_row = start_row + (extended_height - 1);
+
   while (!frontier.empty()) {
     const GridPoint current = frontier.front();
     frontier.pop();
@@ -94,23 +112,11 @@ void BFSCollectExtended(const std::vector<uint8_t> &extended_pixels, int width, 
       const int ncol = current.x + d.first;
       const int nrow = current.y + d.second;
 
-      const int max_valid_global_row = start_row + (extended_height - 1);
       if (ncol < 0 || ncol >= width || nrow < 0 || nrow >= max_valid_global_row) {
         continue;
       }
 
-      const int ext_nrow = nrow - start_row + 1;
-      if (ext_nrow < 0 || ext_nrow >= extended_height) {
-        continue;
-      }
-
-      const size_t neighbor_idx = ToIndex(ncol, ext_nrow, width);
-      if (visited[neighbor_idx] || extended_pixels[neighbor_idx] == 0) {
-        continue;
-      }
-
-      visited[neighbor_idx] = true;
-      frontier.emplace(ncol, nrow);
+      TryVisitNeighborExtended(extended_pixels, width, extended_height, start_row, ncol, nrow, visited, frontier);
     }
   }
 }
@@ -139,7 +145,7 @@ void DiscoverGlobalComponents(BinaryImage &image) {
 }
 
 std::vector<int> SerializeHullsToPackedPoints(const BinaryImage &output, const std::vector<int> &hull_sizes) {
-  const int total_pts = std::accumulate(hull_sizes.begin(), hull_sizes.end(), 0);
+  const int total_pts = static_cast<int>(std::accumulate(hull_sizes.begin(), hull_sizes.end(), 0));
   std::vector<int> packed_points;
   packed_points.reserve(static_cast<size_t>(total_pts) * 2U);
 
@@ -286,11 +292,13 @@ void NalitovDBinaryMPI::FindLocalComponents() {
   const int extended_height = local_rows + 2;
   std::vector<uint8_t> extended_pixels(static_cast<size_t>(extended_height) * static_cast<size_t>(width), 0);
 
+  using diff_t = std::vector<uint8_t>::difference_type;
+
   for (int row = 0; row < local_rows; ++row) {
     const size_t src_offset = static_cast<size_t>(row) * static_cast<size_t>(width);
     const size_t dst_offset = static_cast<size_t>(row + 1) * static_cast<size_t>(width);
-    std::copy_n(local_image_.pixels.begin() + src_offset, static_cast<size_t>(width),
-                extended_pixels.begin() + dst_offset);
+    std::copy_n(local_image_.pixels.begin() + static_cast<diff_t>(src_offset), static_cast<size_t>(width),
+                extended_pixels.begin() + static_cast<diff_t>(dst_offset));
   }
 
   ExchangeBoundaryRows(extended_pixels, extended_height);
@@ -352,7 +360,7 @@ void NalitovDBinaryMPI::ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixe
     bottom_send_buffer.resize(static_cast<size_t>(width), 0);
     if (local_rows > 0) {
       const size_t begin_idx = static_cast<size_t>(local_rows - 1) * static_cast<size_t>(width);
-      const auto begin_it = local_image_.pixels.begin() + begin_idx;
+      const auto begin_it = local_image_.pixels.begin() + static_cast<std::vector<uint8_t>::difference_type>(begin_idx);
       std::copy_n(begin_it, static_cast<size_t>(width), bottom_send_buffer.begin());
     }
 
