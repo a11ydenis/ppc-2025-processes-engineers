@@ -9,6 +9,7 @@
 #include <limits>
 #include <queue>
 #include <ranges>
+#include <utility>
 #include <vector>
 
 #include "nalitov_d_binary/common/include/common.hpp"
@@ -31,8 +32,8 @@ int64_t Cross(const GridPoint &a, const GridPoint &b, const GridPoint &c) {
   return (abx * bcy) - (aby * bcx);
 }
 
-static void BFSCollectGlobal(BinaryImage &image, int start_col, int start_row, std::vector<bool> &visited,
-                             std::vector<GridPoint> &out_component) {
+void BFSCollectGlobal(BinaryImage &image, int start_col, int start_row, std::vector<bool> &visited,
+                      std::vector<GridPoint> &out_component) {
   const int width = image.width;
   const int height = image.height;
 
@@ -66,14 +67,38 @@ static void BFSCollectGlobal(BinaryImage &image, int start_col, int start_row, s
   }
 }
 
-static void BFSCollectExtended(const std::vector<uint8_t> &extended_pixels, int width, int extended_height,
-                               int start_ext_col, int start_ext_row, int start_row_global, int start_row, int end_row,
-                               std::vector<bool> &visited, std::vector<GridPoint> &out_component,
-                               bool &out_touches_local, int &out_min_row) {
+bool TryVisitNeighborExtended(const std::vector<uint8_t> &extended_pixels, int width, int extended_height,
+                              int start_row, const GridPoint &current, const std::pair<int, int> &d,
+                              std::vector<bool> &visited, std::queue<GridPoint> &frontier) {
+  const int ncol = current.x + d.first;
+  const int nrow = current.y + d.second;
+
+  const int max_valid_global_row = start_row + (extended_height - 1);
+  if (ncol < 0 || ncol >= width || nrow < 0 || nrow >= max_valid_global_row) {
+    return false;
+  }
+
+  const int ext_nrow = nrow - start_row + 1;
+  if (ext_nrow < 0 || ext_nrow >= extended_height) {
+    return false;
+  }
+
+  const size_t neighbor_idx = ToIndex(ncol, ext_nrow, width);
+  if (visited[neighbor_idx] || extended_pixels[neighbor_idx] == 0) {
+    return false;
+  }
+
+  visited[neighbor_idx] = true;
+  frontier.emplace(ncol, nrow);
+  return true;
+}
+
+void BFSCollectExtended(const std::vector<uint8_t> &extended_pixels, int width, int extended_height, int start_ext_col,
+                        int start_ext_row, int start_row_global, int start_row, int end_row, std::vector<bool> &visited,
+                        std::vector<GridPoint> &out_component, bool &out_touches_local, int &out_min_row) {
   const std::array<std::pair<int, int>, 4> k_directions = {{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
 
   std::queue<GridPoint> frontier;
-
   frontier.emplace(start_ext_col, start_row_global);
   visited[ToIndex(start_ext_col, start_ext_row, width)] = true;
 
@@ -91,31 +116,12 @@ static void BFSCollectExtended(const std::vector<uint8_t> &extended_pixels, int 
     out_min_row = std::min(out_min_row, current.y);
 
     for (const auto &d : k_directions) {
-      const int ncol = current.x + d.first;
-      const int nrow = current.y + d.second;
-
-      const int max_valid_global_row = start_row + (extended_height - 1);
-      if (ncol < 0 || ncol >= width || nrow < 0 || nrow >= max_valid_global_row) {
-        continue;
-      }
-
-      const int ext_nrow = nrow - start_row + 1;
-      if (ext_nrow < 0 || ext_nrow >= extended_height) {
-        continue;
-      }
-
-      const size_t neighbor_idx = ToIndex(ncol, ext_nrow, width);
-      if (visited[neighbor_idx] || extended_pixels[neighbor_idx] == 0) {
-        continue;
-      }
-
-      visited[neighbor_idx] = true;
-      frontier.emplace(ncol, nrow);
+      TryVisitNeighborExtended(extended_pixels, width, extended_height, start_row, current, d, visited, frontier);
     }
   }
 }
 
-static void DiscoverGlobalComponents(BinaryImage &image) {
+void DiscoverGlobalComponents(BinaryImage &image) {
   const int width = image.width;
   const int height = image.height;
   const size_t total_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
@@ -135,6 +141,39 @@ static void DiscoverGlobalComponents(BinaryImage &image) {
         image.components.push_back(std::move(component));
       }
     }
+  }
+}
+
+void PackHullSizesAndPoints(const BinaryImage &output, std::vector<int> &hull_sizes, std::vector<int> &packed_points) {
+  hull_sizes.reserve(output.convex_hulls.size());
+  for (const auto &hull : output.convex_hulls) {
+    hull_sizes.push_back(static_cast<int>(hull.size()));
+  }
+
+  packed_points.reserve(static_cast<size_t>(std::accumulate(hull_sizes.begin(), hull_sizes.end(), 0)) * 2U);
+  for (const auto &hull : output.convex_hulls) {
+    for (const auto &pt : hull) {
+      packed_points.push_back(pt.x);
+      packed_points.push_back(pt.y);
+    }
+  }
+}
+
+void UnpackPointsToOutput(BinaryImage &output, const std::vector<int> &packed_points,
+                          const std::vector<int> &hull_sizes) {
+  output.convex_hulls.clear();
+  output.convex_hulls.reserve(hull_sizes.size());
+
+  size_t offset = 0;
+  for (size_t i = 0; i < hull_sizes.size(); ++i) {
+    std::vector<GridPoint> hull;
+    hull.reserve(static_cast<size_t>(hull_sizes[i]));
+    for (int j = 0; j < hull_sizes[i]; ++j) {
+      const int x = packed_points[offset++];
+      const int y = packed_points[offset++];
+      hull.emplace_back(x, y);
+    }
+    output.convex_hulls.push_back(std::move(hull));
   }
 }
 
@@ -257,8 +296,8 @@ void NalitovDBinaryMPI::FindLocalComponents() {
   for (int row = 0; row < local_rows; ++row) {
     const size_t src_offset = static_cast<size_t>(row) * static_cast<size_t>(width);
     const size_t dst_offset = static_cast<size_t>(row + 1) * static_cast<size_t>(width);
-    std::copy_n(local_image_.pixels.begin() + src_offset, static_cast<size_t>(width),
-                extended_pixels.begin() + dst_offset);
+    std::copy_n(local_image_.pixels.data() + src_offset, static_cast<size_t>(width),
+                extended_pixels.data() + dst_offset);
   }
 
   ExchangeBoundaryRows(extended_pixels, extended_height);
@@ -305,7 +344,7 @@ void NalitovDBinaryMPI::ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixe
 
     top_send_buffer.resize(static_cast<size_t>(width), 0);
     if (local_rows > 0) {
-      std::copy_n(local_image_.pixels.begin(), static_cast<size_t>(width), top_send_buffer.begin());
+      std::copy_n(local_image_.pixels.data(), static_cast<size_t>(width), top_send_buffer.data());
     }
 
     requests.emplace_back();
@@ -320,8 +359,7 @@ void NalitovDBinaryMPI::ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixe
     bottom_send_buffer.resize(static_cast<size_t>(width), 0);
     if (local_rows > 0) {
       const size_t begin_idx = static_cast<size_t>(local_rows - 1) * static_cast<size_t>(width);
-      const auto begin_it = local_image_.pixels.begin() + begin_idx;
-      std::copy_n(begin_it, static_cast<size_t>(width), bottom_send_buffer.begin());
+      std::copy_n(local_image_.pixels.data() + begin_idx, static_cast<size_t>(width), bottom_send_buffer.data());
     }
 
     requests.emplace_back();
@@ -376,54 +414,32 @@ void NalitovDBinaryMPI::BroadcastOutput() {
 
   std::vector<int> hull_sizes;
   if (rank_ == 0) {
-    hull_sizes.reserve(static_cast<size_t>(hull_count));
-    for (const auto &hull : output.convex_hulls) {
-      hull_sizes.push_back(static_cast<int>(hull.size()));
+    std::vector<int> packed_points;
+    PackHullSizesAndPoints(output, hull_sizes, packed_points);
+
+    if (hull_count > 0) {
+      MPI_Bcast(hull_sizes.data(), hull_count, MPI_INT, 0, MPI_COMM_WORLD);
+      int total_points = static_cast<int>(packed_points.size());
+      MPI_Bcast(&total_points, 1, MPI_INT, 0, MPI_COMM_WORLD);
+      if (total_points > 0) {
+        MPI_Bcast(packed_points.data(), total_points, MPI_INT, 0, MPI_COMM_WORLD);
+      }
+    } else {
+      int total_points = 0;
+      MPI_Bcast(&total_points, 1, MPI_INT, 0, MPI_COMM_WORLD);
     }
   } else {
     hull_sizes.resize(hull_count);
-  }
-
-  if (hull_count > 0) {
-    MPI_Bcast(hull_sizes.data(), hull_count, MPI_INT, 0, MPI_COMM_WORLD);
-  }
-
-  int total_points = 0;
-  for (const auto size : hull_sizes) {
-    total_points += size;
-  }
-
-  std::vector<int> packed_points;
-  if (rank_ == 0) {
-    packed_points.reserve(static_cast<size_t>(total_points) * 2U);
-    for (const auto &hull : output.convex_hulls) {
-      for (const auto &pt : hull) {
-        packed_points.push_back(pt.x);
-        packed_points.push_back(pt.y);
+    if (hull_count > 0) {
+      MPI_Bcast(hull_sizes.data(), hull_count, MPI_INT, 0, MPI_COMM_WORLD);
+      int total_points = 0;
+      MPI_Bcast(&total_points, 1, MPI_INT, 0, MPI_COMM_WORLD);
+      std::vector<int> packed_points;
+      if (total_points > 0) {
+        packed_points.resize(static_cast<size_t>(total_points));
+        MPI_Bcast(packed_points.data(), total_points, MPI_INT, 0, MPI_COMM_WORLD);
       }
-    }
-  } else {
-    packed_points.resize(static_cast<size_t>(total_points) * 2U);
-  }
-
-  if (total_points > 0) {
-    MPI_Bcast(packed_points.data(), total_points * 2, MPI_INT, 0, MPI_COMM_WORLD);
-  }
-
-  if (rank_ != 0) {
-    output.convex_hulls.clear();
-    output.convex_hulls.reserve(hull_count);
-
-    size_t offset = 0;
-    for (int i = 0; i < hull_count; ++i) {
-      std::vector<GridPoint> hull;
-      hull.reserve(static_cast<size_t>(hull_sizes[i]));
-      for (int j = 0; j < hull_sizes[i]; ++j) {
-        const int x = packed_points[offset++];
-        const int y = packed_points[offset++];
-        hull.emplace_back(x, y);
-      }
-      output.convex_hulls.push_back(std::move(hull));
+      UnpackPointsToOutput(output, packed_points, hull_sizes);
     }
   }
 

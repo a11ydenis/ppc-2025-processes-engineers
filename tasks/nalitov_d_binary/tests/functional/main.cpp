@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -27,12 +28,12 @@ BinaryImage MakeBlankImage(int width, int height, uint8_t value = 0) {
   BinaryImage img;
   img.width = width;
   img.height = height;
-  img.pixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), value);
+  img.pixels.assign((static_cast<size_t>(width) * static_cast<size_t>(height)), value);
   return img;
 }
 
 void SetPixel(BinaryImage &image, int x, int y, uint8_t value) {
-  const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(image.width) + static_cast<size_t>(x);
+  const size_t idx = (static_cast<size_t>(y) * static_cast<size_t>(image.width)) + static_cast<size_t>(x);
   image.pixels[idx] = value;
 }
 
@@ -108,13 +109,12 @@ const Pattern &GetPattern(int id) {
 }
 
 std::vector<GridPoint> NormaliseHull(std::vector<GridPoint> hull) {
-  std::sort(hull.begin(), hull.end(), [](const GridPoint &lhs, const GridPoint &rhs) {
-    if (lhs.y != rhs.y) {
-      return lhs.y < rhs.y;
-    }
-    return lhs.x < rhs.x;
+  std::ranges::sort(hull, [](const GridPoint &lhs, const GridPoint &rhs) {
+    return (lhs.y != rhs.y) ? (lhs.y < rhs.y) : (lhs.x < rhs.x);
   });
-  hull.erase(std::unique(hull.begin(), hull.end()), hull.end());
+
+  const auto unique_range = std::ranges::unique(hull);
+  hull.erase(unique_range.begin(), hull.end());
   return hull;
 }
 
@@ -124,19 +124,16 @@ std::vector<std::vector<GridPoint>> NormaliseHulls(const std::vector<std::vector
   for (const auto &hull : hulls) {
     normalised.push_back(NormaliseHull(hull));
   }
+
   auto comparator = [](const std::vector<GridPoint> &lhs, const std::vector<GridPoint> &rhs) {
     if (lhs.size() != rhs.size()) {
       return lhs.size() < rhs.size();
     }
-    return std::lexicographical_compare(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(),
-                                        [](const GridPoint &a, const GridPoint &b) {
-      if (a.y != b.y) {
-        return a.y < b.y;
-      }
-      return a.x < b.x;
-    });
+    return std::ranges::lexicographical_compare(
+        lhs, rhs, [](const GridPoint &a, const GridPoint &b) { return (a.y != b.y) ? (a.y < b.y) : (a.x < b.x); });
   };
-  std::sort(normalised.begin(), normalised.end(), comparator);
+
+  std::ranges::sort(normalised, comparator);
   return normalised;
 }
 
