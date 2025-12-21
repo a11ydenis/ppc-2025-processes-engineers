@@ -30,6 +30,59 @@ long long Cross(const GridPoint &a, const GridPoint &b, const GridPoint &c) {
   return (abx * bcy) - (aby * bcx);
 }
 
+void DiscoverGlobalComponents(BinaryImage &image) {
+  const int width = image.width;
+  const int height = image.height;
+  const size_t total_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+  std::vector<bool> visited(total_pixels, false);
+  image.components.clear();
+
+  const std::array<std::pair<int, int>, 4> kDirections = {std::make_pair(1, 0), std::make_pair(-1, 0),
+                                                          std::make_pair(0, 1), std::make_pair(0, -1)};
+
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const size_t idx = ToIndex(x, y, width);
+      if (image.pixels[idx] == 0 || visited[idx]) {
+        continue;
+      }
+
+      std::queue<GridPoint> frontier;
+      std::vector<GridPoint> component;
+      frontier.emplace(x, y);
+      visited[idx] = true;
+
+      while (!frontier.empty()) {
+        const GridPoint current = frontier.front();
+        frontier.pop();
+        component.push_back(current);
+
+        for (const auto &[dx, dy] : kDirections) {
+          const int nx = current.x + dx;
+          const int ny = current.y + dy;
+
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
+            continue;
+          }
+
+          const size_t nidx = ToIndex(nx, ny, width);
+          if (visited[nidx] || image.pixels[nidx] == 0) {
+            continue;
+          }
+
+          visited[nidx] = true;
+          frontier.emplace(nx, ny);
+        }
+      }
+
+      if (!component.empty()) {
+        image.components.push_back(std::move(component));
+      }
+    }
+  }
+}
+
 }  // namespace
 
 NalitovDBinaryMPI::NalitovDBinaryMPI(const InType &in) : full_image_(in), local_image_() {
@@ -259,50 +312,26 @@ void NalitovDBinaryMPI::ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixe
 }
 
 void NalitovDBinaryMPI::CollectGlobalHulls() {
-  const int local_hull_count = static_cast<int>(local_image_.convex_hulls.size());
-  std::vector<int> hull_counts;
-  if (rank_ == 0) {
-    hull_counts.resize(size_, 0);
-  }
-
-  MPI_Gather(&local_hull_count, 1, MPI_INT, rank_ == 0 ? hull_counts.data() : nullptr, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Gatherv(local_image_.pixels.data(), counts_[rank_], MPI_UINT8_T,
+              rank_ == 0 ? full_image_.pixels.data() : nullptr, counts_.data(), displs_.data(), MPI_UINT8_T, 0,
+              MPI_COMM_WORLD);
 
   if (rank_ == 0) {
-    full_image_.convex_hulls = local_image_.convex_hulls;
+    DiscoverGlobalComponents(full_image_);
 
-    for (int proc = 1; proc < size_; ++proc) {
-      const int hull_count = hull_counts[proc];
-      for (int h = 0; h < hull_count; ++h) {
-        int hull_size = 0;
-        MPI_Recv(&hull_size, 1, MPI_INT, proc, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        if (hull_size <= 0) {
-          continue;
-        }
-        std::vector<int> buffer(static_cast<size_t>(hull_size) * 2U);
-        MPI_Recv(buffer.data(), hull_size * 2, MPI_INT, proc, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    full_image_.convex_hulls.clear();
+    full_image_.convex_hulls.reserve(full_image_.components.size());
 
-        std::vector<GridPoint> hull;
-        hull.reserve(static_cast<size_t>(hull_size));
-        for (int i = 0; i < hull_size; ++i) {
-          hull.emplace_back(buffer[static_cast<size_t>(i) * 2U], buffer[static_cast<size_t>(i) * 2U + 1]);
-        }
-        full_image_.convex_hulls.push_back(std::move(hull));
-      }
-    }
-  } else {
-    for (const auto &hull : local_image_.convex_hulls) {
-      const int hull_size = static_cast<int>(hull.size());
-      MPI_Send(&hull_size, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
-      if (hull_size <= 0) {
+    for (const auto &component : full_image_.components) {
+      if (component.empty()) {
         continue;
       }
-      std::vector<int> buffer;
-      buffer.reserve(static_cast<size_t>(hull_size) * 2U);
-      for (const auto &pt : hull) {
-        buffer.push_back(pt.x);
-        buffer.push_back(pt.y);
+
+      if (component.size() <= 2U) {
+        full_image_.convex_hulls.push_back(component);
+      } else {
+        full_image_.convex_hulls.push_back(BuildConvexHull(component));
       }
-      MPI_Send(buffer.data(), hull_size * 2, MPI_INT, 0, 1, MPI_COMM_WORLD);
     }
   }
 }
