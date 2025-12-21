@@ -292,13 +292,13 @@ void NalitovDBinaryMPI::FindLocalComponents() {
   const int extended_height = local_rows + 2;
   std::vector<uint8_t> extended_pixels(static_cast<size_t>(extended_height) * static_cast<size_t>(width), 0);
 
-  using diff_t = std::vector<uint8_t>::difference_type;
+  using DiffT = std::vector<uint8_t>::difference_type;
 
   for (int row = 0; row < local_rows; ++row) {
     const size_t src_offset = static_cast<size_t>(row) * static_cast<size_t>(width);
     const size_t dst_offset = static_cast<size_t>(row + 1) * static_cast<size_t>(width);
-    std::copy_n(local_image_.pixels.begin() + static_cast<diff_t>(src_offset), static_cast<size_t>(width),
-                extended_pixels.begin() + static_cast<diff_t>(dst_offset));
+    std::copy_n(local_image_.pixels.begin() + static_cast<DiffT>(src_offset), static_cast<size_t>(width),
+                extended_pixels.begin() + static_cast<DiffT>(dst_offset));
   }
 
   ExchangeBoundaryRows(extended_pixels, extended_height);
