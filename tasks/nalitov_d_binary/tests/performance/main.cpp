@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <ranges>
 #include <vector>
 
 #include "nalitov_d_binary/common/include/common.hpp"

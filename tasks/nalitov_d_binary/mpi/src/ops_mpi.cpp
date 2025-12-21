@@ -8,7 +8,8 @@
 #include <cstdint>
 #include <limits>
 #include <queue>
-#include <utility>
+#include <ranges>
+#include <vector>
 
 #include "nalitov_d_binary/common/include/common.hpp"
 
@@ -19,66 +20,96 @@ namespace {
 constexpr uint8_t kThreshold = 128;
 
 [[nodiscard]] size_t ToIndex(int x, int y, int width) {
-  return static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+  return (static_cast<size_t>(y) * static_cast<size_t>(width)) + static_cast<size_t>(x);
 }
 
-long long Cross(const GridPoint &a, const GridPoint &b, const GridPoint &c) {
-  const long long abx = static_cast<long long>(b.x) - static_cast<long long>(a.x);
-  const long long aby = static_cast<long long>(b.y) - static_cast<long long>(a.y);
-  const long long bcx = static_cast<long long>(c.x) - static_cast<long long>(b.x);
-  const long long bcy = static_cast<long long>(c.y) - static_cast<long long>(b.y);
+int64_t Cross(const GridPoint &a, const GridPoint &b, const GridPoint &c) {
+  const int64_t abx = static_cast<int64_t>(b.x) - static_cast<int64_t>(a.x);
+  const int64_t aby = static_cast<int64_t>(b.y) - static_cast<int64_t>(a.y);
+  const int64_t bcx = static_cast<int64_t>(c.x) - static_cast<int64_t>(b.x);
+  const int64_t bcy = static_cast<int64_t>(c.y) - static_cast<int64_t>(b.y);
   return (abx * bcy) - (aby * bcx);
 }
 
-void DiscoverGlobalComponents(BinaryImage &image) {
+static void BFSCollectGlobal(BinaryImage &image, int start_col, int start_row, std::vector<bool> &visited,
+                             std::vector<GridPoint> &out_component) {
   const int width = image.width;
   const int height = image.height;
-  const size_t total_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
 
-  std::vector<bool> visited(total_pixels, false);
-  image.components.clear();
+  const std::array<std::pair<int, int>, 4> k_directions = {{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
 
-  const std::array<std::pair<int, int>, 4> kDirections = {std::make_pair(1, 0), std::make_pair(-1, 0),
-                                                          std::make_pair(0, 1), std::make_pair(0, -1)};
+  std::queue<GridPoint> frontier;
+  frontier.emplace(start_col, start_row);
+  visited[ToIndex(start_col, start_row, width)] = true;
 
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      const size_t idx = ToIndex(x, y, width);
-      if (image.pixels[idx] == 0 || visited[idx]) {
+  while (!frontier.empty()) {
+    const GridPoint current = frontier.front();
+    frontier.pop();
+    out_component.push_back(current);
+
+    for (const auto &d : k_directions) {
+      const int ncol = current.x + d.first;
+      const int nrow = current.y + d.second;
+
+      if (ncol < 0 || ncol >= width || nrow < 0 || nrow >= height) {
         continue;
       }
 
-      std::queue<GridPoint> frontier;
-      std::vector<GridPoint> component;
-      frontier.emplace(x, y);
-      visited[idx] = true;
-
-      while (!frontier.empty()) {
-        const GridPoint current = frontier.front();
-        frontier.pop();
-        component.push_back(current);
-
-        for (const auto &[dx, dy] : kDirections) {
-          const int nx = current.x + dx;
-          const int ny = current.y + dy;
-
-          if (nx < 0 || nx >= width || ny < 0 || ny >= height) {
-            continue;
-          }
-
-          const size_t nidx = ToIndex(nx, ny, width);
-          if (visited[nidx] || image.pixels[nidx] == 0) {
-            continue;
-          }
-
-          visited[nidx] = true;
-          frontier.emplace(nx, ny);
-        }
+      const size_t nidx = ToIndex(ncol, nrow, width);
+      if (visited[nidx] || image.pixels[nidx] == 0) {
+        continue;
       }
 
-      if (!component.empty()) {
-        image.components.push_back(std::move(component));
+      visited[nidx] = true;
+      frontier.emplace(ncol, nrow);
+    }
+  }
+}
+
+static void BFSCollectExtended(const std::vector<uint8_t> &extended_pixels, int width, int extended_height,
+                               int start_ext_col, int start_ext_row, int start_row_global, int start_row, int end_row,
+                               std::vector<bool> &visited, std::vector<GridPoint> &out_component,
+                               bool &out_touches_local, int &out_min_row) {
+  const std::array<std::pair<int, int>, 4> k_directions = {{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
+
+  std::queue<GridPoint> frontier;
+
+  frontier.emplace(start_ext_col, start_row_global);
+  visited[ToIndex(start_ext_col, start_ext_row, width)] = true;
+
+  out_touches_local = false;
+  out_min_row = std::numeric_limits<int>::max();
+
+  while (!frontier.empty()) {
+    const GridPoint current = frontier.front();
+    frontier.pop();
+    out_component.push_back(current);
+
+    if (current.y >= start_row && current.y < end_row) {
+      out_touches_local = true;
+    }
+    out_min_row = std::min(out_min_row, current.y);
+
+    for (const auto &d : k_directions) {
+      const int ncol = current.x + d.first;
+      const int nrow = current.y + d.second;
+
+      if (ncol < 0 || ncol >= width || nrow < 0 || nrow >= (start_row + (extended_height - 1))) {
+        continue;
       }
+
+      const int ext_nrow = nrow - start_row + 1;
+      if (ext_nrow < 0 || ext_nrow >= extended_height) {
+        continue;
+      }
+
+      const size_t neighbor_idx = ToIndex(ncol, ext_nrow, width);
+      if (visited[neighbor_idx] || extended_pixels[neighbor_idx] == 0) {
+        continue;
+      }
+
+      visited[neighbor_idx] = true;
+      frontier.emplace(ncol, nrow);
     }
   }
 }
@@ -147,13 +178,13 @@ bool NalitovDBinaryMPI::PostProcessingImpl() {
 }
 
 void NalitovDBinaryMPI::BroadcastDimensions() {
-  int dims[2] = {0, 0};
+  std::array<int, 2> dims = {0, 0};
   if (rank_ == 0) {
     dims[0] = full_image_.width;
     dims[1] = full_image_.height;
   }
 
-  MPI_Bcast(dims, 2, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(dims.data(), static_cast<int>(dims.size()), MPI_INT, 0, MPI_COMM_WORLD);
   local_image_.width = dims[0];
   local_image_.height = dims[1];
 }
@@ -176,15 +207,15 @@ void NalitovDBinaryMPI::ScatterPixels() {
     displacement += counts_[proc];
 
     if (proc == rank_) {
-      start_row_ = base_rows * proc + std::min(proc, remainder);
+      start_row_ = (base_rows * proc) + std::min(proc, remainder);
       end_row_ = start_row_ + rows;
     }
   }
 
   local_image_.pixels.resize(static_cast<size_t>(counts_[rank_]));
 
-  MPI_Scatterv(rank_ == 0 ? full_image_.pixels.data() : nullptr, counts_.data(), displs_.data(), MPI_UINT8_T,
-               local_image_.pixels.data(), counts_[rank_], MPI_UINT8_T, 0, MPI_COMM_WORLD);
+  MPI_Scatterv(rank_ == 0 ? full_image_.pixels.data() : nullptr, counts_.data(), displs_.data(), MPI_BYTE,
+               local_image_.pixels.data(), counts_[rank_], MPI_BYTE, 0, MPI_COMM_WORLD);
 }
 
 void NalitovDBinaryMPI::ThresholdLocalPixels() {
@@ -200,8 +231,10 @@ void NalitovDBinaryMPI::FindLocalComponents() {
   std::vector<uint8_t> extended_pixels(static_cast<size_t>(extended_height) * static_cast<size_t>(width), 0);
 
   for (int row = 0; row < local_rows; ++row) {
-    std::copy_n(local_image_.pixels.begin() + static_cast<long long>(row) * width, static_cast<size_t>(width),
-                extended_pixels.begin() + static_cast<long long>(row + 1) * width);
+    const size_t src_offset = static_cast<size_t>(row) * static_cast<size_t>(width);
+    const size_t dst_offset = static_cast<size_t>(row + 1) * static_cast<size_t>(width);
+    std::copy_n(local_image_.pixels.begin() + src_offset, static_cast<size_t>(width),
+                extended_pixels.begin() + dst_offset);
   }
 
   ExchangeBoundaryRows(extended_pixels, extended_height);
@@ -210,56 +243,23 @@ void NalitovDBinaryMPI::FindLocalComponents() {
   std::vector<bool> visited(extended_pixels.size(), false);
   local_image_.components.clear();
 
-  const std::array<std::pair<int, int>, 4> kDirections = {std::make_pair(1, 0), std::make_pair(-1, 0),
-                                                          std::make_pair(0, 1), std::make_pair(0, -1)};
+  const std::array<std::pair<int, int>, 4> k_directions = {{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
 
-  for (int ext_y = 1; ext_y <= local_rows; ++ext_y) {
-    for (int x = 0; x < width; ++x) {
-      const size_t idx = ToIndex(x, ext_y, width);
+  for (int ext_row = 1; ext_row <= local_rows; ++ext_row) {
+    for (int col = 0; col < width; ++col) {
+      const size_t idx = ToIndex(col, ext_row, width);
       if (extended_pixels[idx] == 0 || visited[idx]) {
         continue;
       }
 
-      std::queue<GridPoint> frontier;
+      const int global_row = start_row_ + ext_row - 1;
+
       std::vector<GridPoint> component;
-
-      const int global_y = start_row_ + ext_y - 1;
-      frontier.emplace(x, global_y);
-      visited[idx] = true;
-
       bool touches_local = false;
       int min_row = std::numeric_limits<int>::max();
 
-      while (!frontier.empty()) {
-        const GridPoint current = frontier.front();
-        frontier.pop();
-        component.push_back(current);
-
-        touches_local |= (current.y >= start_row_ && current.y < end_row_);
-        min_row = std::min(min_row, current.y);
-
-        for (const auto &[dx, dy] : kDirections) {
-          const int nx = current.x + dx;
-          const int ny = current.y + dy;
-
-          if (nx < 0 || nx >= width || ny < 0 || ny >= global_rows) {
-            continue;
-          }
-
-          const int ext_ny = ny - start_row_ + 1;
-          if (ext_ny < 0 || ext_ny >= extended_height) {
-            continue;
-          }
-
-          const size_t neighbor_idx = ToIndex(nx, ext_ny, width);
-          if (visited[neighbor_idx] || extended_pixels[neighbor_idx] == 0) {
-            continue;
-          }
-
-          visited[neighbor_idx] = true;
-          frontier.emplace(nx, ny);
-        }
-      }
+      BFSCollectExtended(extended_pixels, width, extended_height, col, ext_row, global_row, start_row_, start_row_,
+                         end_row_, visited, component, touches_local, min_row);
 
       if (!component.empty() && touches_local && min_row >= start_row_) {
         local_image_.components.push_back(std::move(component));
@@ -280,7 +280,7 @@ void NalitovDBinaryMPI::ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixe
 
   if (rank_ > 0) {
     requests.emplace_back();
-    MPI_Irecv(extended_pixels.data(), width, MPI_UINT8_T, rank_ - 1, 0, MPI_COMM_WORLD, &requests.back());
+    MPI_Irecv(extended_pixels.data(), width, MPI_BYTE, rank_ - 1, 0, MPI_COMM_WORLD, &requests.back());
 
     top_send_buffer.resize(static_cast<size_t>(width), 0);
     if (local_rows > 0) {
@@ -288,22 +288,23 @@ void NalitovDBinaryMPI::ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixe
     }
 
     requests.emplace_back();
-    MPI_Isend(top_send_buffer.data(), width, MPI_UINT8_T, rank_ - 1, 1, MPI_COMM_WORLD, &requests.back());
+    MPI_Isend(top_send_buffer.data(), width, MPI_BYTE, rank_ - 1, 1, MPI_COMM_WORLD, &requests.back());
   }
 
   if (rank_ < size_ - 1) {
     requests.emplace_back();
-    MPI_Irecv(extended_pixels.data() + static_cast<size_t>(extended_height - 1) * static_cast<size_t>(width), width,
-              MPI_UINT8_T, rank_ + 1, 1, MPI_COMM_WORLD, &requests.back());
+    MPI_Irecv(extended_pixels.data() + (static_cast<size_t>(extended_height - 1) * static_cast<size_t>(width)), width,
+              MPI_BYTE, rank_ + 1, 1, MPI_COMM_WORLD, &requests.back());
 
     bottom_send_buffer.resize(static_cast<size_t>(width), 0);
     if (local_rows > 0) {
-      const auto begin_it = local_image_.pixels.begin() + static_cast<long long>(local_rows - 1) * width;
+      const size_t begin_idx = static_cast<size_t>(local_rows - 1) * static_cast<size_t>(width);
+      const auto begin_it = local_image_.pixels.begin() + begin_idx;
       std::copy_n(begin_it, static_cast<size_t>(width), bottom_send_buffer.begin());
     }
 
     requests.emplace_back();
-    MPI_Isend(bottom_send_buffer.data(), width, MPI_UINT8_T, rank_ + 1, 0, MPI_COMM_WORLD, &requests.back());
+    MPI_Isend(bottom_send_buffer.data(), width, MPI_BYTE, rank_ + 1, 0, MPI_COMM_WORLD, &requests.back());
   }
 
   if (!requests.empty()) {
@@ -312,8 +313,8 @@ void NalitovDBinaryMPI::ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixe
 }
 
 void NalitovDBinaryMPI::CollectGlobalHulls() {
-  MPI_Gatherv(local_image_.pixels.data(), counts_[rank_], MPI_UINT8_T, rank_ == 0 ? full_image_.pixels.data() : nullptr,
-              counts_.data(), displs_.data(), MPI_UINT8_T, 0, MPI_COMM_WORLD);
+  MPI_Gatherv(local_image_.pixels.data(), counts_[rank_], MPI_BYTE, rank_ == 0 ? full_image_.pixels.data() : nullptr,
+              counts_.data(), displs_.data(), MPI_BYTE, 0, MPI_COMM_WORLD);
 
   if (rank_ == 0) {
     DiscoverGlobalComponents(full_image_);
@@ -338,12 +339,12 @@ void NalitovDBinaryMPI::CollectGlobalHulls() {
 void NalitovDBinaryMPI::BroadcastOutput() {
   BinaryImage &output = GetOutput();
 
-  int dims[2] = {0, 0};
+  std::array<int, 2> dims = {0, 0};
   if (rank_ == 0) {
     dims[0] = output.width;
     dims[1] = output.height;
   }
-  MPI_Bcast(dims, 2, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(dims.data(), static_cast<int>(dims.size()), MPI_INT, 0, MPI_COMM_WORLD);
   if (rank_ != 0) {
     output.width = dims[0];
     output.height = dims[1];
@@ -423,14 +424,15 @@ std::vector<GridPoint> NalitovDBinaryMPI::BuildConvexHull(const std::vector<Grid
   }
 
   std::vector<GridPoint> sorted_points = points;
-  std::sort(sorted_points.begin(), sorted_points.end(), [](const GridPoint &lhs, const GridPoint &rhs) {
+  std::ranges::sort(sorted_points, [](const GridPoint &lhs, const GridPoint &rhs) {
     if (lhs.x != rhs.x) {
       return lhs.x < rhs.x;
     }
     return lhs.y < rhs.y;
   });
 
-  sorted_points.erase(std::unique(sorted_points.begin(), sorted_points.end()), sorted_points.end());
+  const auto unique_end = std::ranges::unique(sorted_points);
+  sorted_points.erase(unique_end, sorted_points.end());
 
   if (sorted_points.size() <= 2U) {
     return sorted_points;
@@ -448,17 +450,40 @@ std::vector<GridPoint> NalitovDBinaryMPI::BuildConvexHull(const std::vector<Grid
     lower.push_back(pt);
   }
 
-  for (auto it = sorted_points.rbegin(); it != sorted_points.rend(); ++it) {
-    while (upper.size() >= 2U && Cross(upper[upper.size() - 2U], upper.back(), *it) <= 0) {
+  for (const auto &sorted_point : std::ranges::reverse_view(sorted_points)) {
+    while (upper.size() >= 2U && Cross(upper[upper.size() - 2U], upper.back(), sorted_point) <= 0) {
       upper.pop_back();
     }
-    upper.push_back(*it);
+    upper.push_back(sorted_point);
   }
 
   lower.pop_back();
   upper.pop_back();
   lower.insert(lower.end(), upper.begin(), upper.end());
   return lower;
+}
+
+void DiscoverGlobalComponents(BinaryImage &image) {
+  const int width = image.width;
+  const int height = image.height;
+  const size_t total_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+  std::vector<bool> visited(total_pixels, false);
+  image.components.clear();
+
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      const size_t idx = ToIndex(col, row, width);
+      if (image.pixels[idx] == 0 || visited[idx]) {
+        continue;
+      }
+      std::vector<GridPoint> component;
+      BFSCollectGlobal(image, col, row, visited, component);
+      if (!component.empty()) {
+        image.components.push_back(std::move(component));
+      }
+    }
+  }
 }
 
 }  // namespace nalitov_d_binary
