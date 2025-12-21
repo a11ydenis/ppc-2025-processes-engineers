@@ -94,7 +94,8 @@ static void BFSCollectExtended(const std::vector<uint8_t> &extended_pixels, int 
       const int ncol = current.x + d.first;
       const int nrow = current.y + d.second;
 
-      if (ncol < 0 || ncol >= width || nrow < 0 || nrow >= (start_row + (extended_height - 1))) {
+      const int max_valid_global_row = start_row + (extended_height - 1);
+      if (ncol < 0 || ncol >= width || nrow < 0 || nrow >= max_valid_global_row) {
         continue;
       }
 
@@ -110,6 +111,29 @@ static void BFSCollectExtended(const std::vector<uint8_t> &extended_pixels, int 
 
       visited[neighbor_idx] = true;
       frontier.emplace(ncol, nrow);
+    }
+  }
+}
+
+static void DiscoverGlobalComponents(BinaryImage &image) {
+  const int width = image.width;
+  const int height = image.height;
+  const size_t total_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+  std::vector<bool> visited(total_pixels, false);
+  image.components.clear();
+
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      const size_t idx = ToIndex(col, row, width);
+      if (image.pixels[idx] == 0 || visited[idx]) {
+        continue;
+      }
+      std::vector<GridPoint> component;
+      BFSCollectGlobal(image, col, row, visited, component);
+      if (!component.empty()) {
+        image.components.push_back(std::move(component));
+      }
     }
   }
 }
@@ -239,11 +263,8 @@ void NalitovDBinaryMPI::FindLocalComponents() {
 
   ExchangeBoundaryRows(extended_pixels, extended_height);
 
-  const int global_rows = local_image_.height;
   std::vector<bool> visited(extended_pixels.size(), false);
   local_image_.components.clear();
-
-  const std::array<std::pair<int, int>, 4> k_directions = {{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
 
   for (int ext_row = 1; ext_row <= local_rows; ++ext_row) {
     for (int col = 0; col < width; ++col) {
@@ -258,8 +279,8 @@ void NalitovDBinaryMPI::FindLocalComponents() {
       bool touches_local = false;
       int min_row = std::numeric_limits<int>::max();
 
-      BFSCollectExtended(extended_pixels, width, extended_height, col, ext_row, global_row, start_row_, start_row_,
-                         end_row_, visited, component, touches_local, min_row);
+      BFSCollectExtended(extended_pixels, width, extended_height, col, ext_row, global_row, start_row_, end_row_,
+                         visited, component, touches_local, min_row);
 
       if (!component.empty() && touches_local && min_row >= start_row_) {
         local_image_.components.push_back(std::move(component));
@@ -355,7 +376,7 @@ void NalitovDBinaryMPI::BroadcastOutput() {
 
   std::vector<int> hull_sizes;
   if (rank_ == 0) {
-    hull_sizes.reserve(hull_count);
+    hull_sizes.reserve(static_cast<size_t>(hull_count));
     for (const auto &hull : output.convex_hulls) {
       hull_sizes.push_back(static_cast<int>(hull.size()));
     }
@@ -368,14 +389,8 @@ void NalitovDBinaryMPI::BroadcastOutput() {
   }
 
   int total_points = 0;
-  if (rank_ == 0) {
-    for (const auto size : hull_sizes) {
-      total_points += size;
-    }
-  } else {
-    for (const auto size : hull_sizes) {
-      total_points += size;
-    }
+  for (const auto size : hull_sizes) {
+    total_points += size;
   }
 
   std::vector<int> packed_points;
@@ -431,8 +446,9 @@ std::vector<GridPoint> NalitovDBinaryMPI::BuildConvexHull(const std::vector<Grid
     return lhs.y < rhs.y;
   });
 
-  const auto unique_end = std::ranges::unique(sorted_points);
-  sorted_points.erase(unique_end, sorted_points.end());
+  const auto unique_range = std::ranges::unique(sorted_points);
+  auto unique_end_it = unique_range.begin();
+  sorted_points.erase(unique_end_it, sorted_points.end());
 
   if (sorted_points.size() <= 2U) {
     return sorted_points;
@@ -461,29 +477,6 @@ std::vector<GridPoint> NalitovDBinaryMPI::BuildConvexHull(const std::vector<Grid
   upper.pop_back();
   lower.insert(lower.end(), upper.begin(), upper.end());
   return lower;
-}
-
-void DiscoverGlobalComponents(BinaryImage &image) {
-  const int width = image.width;
-  const int height = image.height;
-  const size_t total_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
-
-  std::vector<bool> visited(total_pixels, false);
-  image.components.clear();
-
-  for (int row = 0; row < height; ++row) {
-    for (int col = 0; col < width; ++col) {
-      const size_t idx = ToIndex(col, row, width);
-      if (image.pixels[idx] == 0 || visited[idx]) {
-        continue;
-      }
-      std::vector<GridPoint> component;
-      BFSCollectGlobal(image, col, row, visited, component);
-      if (!component.empty()) {
-        image.components.push_back(std::move(component));
-      }
-    }
-  }
 }
 
 }  // namespace nalitov_d_binary
