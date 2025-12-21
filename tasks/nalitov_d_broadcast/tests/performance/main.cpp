@@ -13,7 +13,7 @@
 namespace nalitov_d_broadcast {
 
 class NalitovDRunPerfTestProcesses : public ppc::util::BaseRunPerfTests<InType, OutType> {
-  const int kArraySize_ = 2000;
+  const int kArraySize_ = 6000000;
   InType test_input_{};
 
   void SetUp() override {
