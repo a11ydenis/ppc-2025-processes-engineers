@@ -109,7 +109,7 @@ class NalitovDBinaryPerfTests : public ppc::util::BaseRunPerfTests<InType, OutTy
   }
 
   InType GetTestInputData() final {
-    input_data_ = MakePerfImage(256);
+    input_data_ = MakePerfImage(384);
     return input_data_;
   }
 
