@@ -26,6 +26,7 @@ class NalitovDBinaryMPI : public BaseTask {
   void FindLocalComponents();
   void ExchangeBoundaryRows(std::vector<uint8_t> &extended_pixels, int extended_height) const;
   void CollectGlobalHulls();
+  void BroadcastOutput();
   static std::vector<GridPoint> BuildConvexHull(const std::vector<GridPoint> &points);
 
   BinaryImage full_image_;

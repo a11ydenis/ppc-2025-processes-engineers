@@ -80,14 +80,16 @@ bool NalitovDBinaryMPI::RunImpl() {
   }
 
   CollectGlobalHulls();
-
-  if (rank_ == 0) {
-    GetOutput() = full_image_;
-  }
   return true;
 }
 
 bool NalitovDBinaryMPI::PostProcessingImpl() {
+  if (rank_ == 0) {
+    GetOutput() = full_image_;
+  } else {
+    GetOutput() = BinaryImage{};
+  }
+  BroadcastOutput();
   return true;
 }
 
@@ -302,6 +304,88 @@ void NalitovDBinaryMPI::CollectGlobalHulls() {
       }
       MPI_Send(buffer.data(), hull_size * 2, MPI_INT, 0, 1, MPI_COMM_WORLD);
     }
+  }
+}
+
+void NalitovDBinaryMPI::BroadcastOutput() {
+  BinaryImage &output = GetOutput();
+
+  int dims[2] = {0, 0};
+  if (rank_ == 0) {
+    dims[0] = output.width;
+    dims[1] = output.height;
+  }
+  MPI_Bcast(dims, 2, MPI_INT, 0, MPI_COMM_WORLD);
+  if (rank_ != 0) {
+    output.width = dims[0];
+    output.height = dims[1];
+  }
+
+  int hull_count = rank_ == 0 ? static_cast<int>(output.convex_hulls.size()) : 0;
+  MPI_Bcast(&hull_count, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  std::vector<int> hull_sizes;
+  if (rank_ == 0) {
+    hull_sizes.reserve(hull_count);
+    for (const auto &hull : output.convex_hulls) {
+      hull_sizes.push_back(static_cast<int>(hull.size()));
+    }
+  } else {
+    hull_sizes.resize(hull_count);
+  }
+
+  if (hull_count > 0) {
+    MPI_Bcast(hull_sizes.data(), hull_count, MPI_INT, 0, MPI_COMM_WORLD);
+  }
+
+  int total_points = 0;
+  if (rank_ == 0) {
+    for (const auto size : hull_sizes) {
+      total_points += size;
+    }
+  } else {
+    for (const auto size : hull_sizes) {
+      total_points += size;
+    }
+  }
+
+  std::vector<int> packed_points;
+  if (rank_ == 0) {
+    packed_points.reserve(static_cast<size_t>(total_points) * 2U);
+    for (const auto &hull : output.convex_hulls) {
+      for (const auto &pt : hull) {
+        packed_points.push_back(pt.x);
+        packed_points.push_back(pt.y);
+      }
+    }
+  } else {
+    packed_points.resize(static_cast<size_t>(total_points) * 2U);
+  }
+
+  if (total_points > 0) {
+    MPI_Bcast(packed_points.data(), total_points * 2, MPI_INT, 0, MPI_COMM_WORLD);
+  }
+
+  if (rank_ != 0) {
+    output.convex_hulls.clear();
+    output.convex_hulls.reserve(hull_count);
+
+    size_t offset = 0;
+    for (int i = 0; i < hull_count; ++i) {
+      std::vector<GridPoint> hull;
+      hull.reserve(static_cast<size_t>(hull_sizes[i]));
+      for (int j = 0; j < hull_sizes[i]; ++j) {
+        const int x = packed_points[offset++];
+        const int y = packed_points[offset++];
+        hull.emplace_back(x, y);
+      }
+      output.convex_hulls.push_back(std::move(hull));
+    }
+  }
+
+  if (rank_ != 0) {
+    output.pixels.assign(static_cast<size_t>(output.width) * static_cast<size_t>(output.height), 0);
+    output.components.clear();
   }
 }
 
